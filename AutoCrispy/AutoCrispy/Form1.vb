@@ -44,6 +44,8 @@ Public Class Form1
     Private Const SpandrelRunnerName As String = "spandrel_upscale.py"
     Private SpandrelScanGeneration As Integer = 0
     Private SpandrelScanCancellation As CancellationTokenSource
+    Private ReadOnly ActiveProcessLock As New Object()
+    Private ActiveProcesses As New List(Of Process)
 
 #End Region
 
@@ -595,17 +597,23 @@ Public Class Form1
     End Sub
 
     Private Sub WatchDogButton_Click(sender As Object, e As EventArgs) Handles WatchDogButton.Click
-        If (Not (Directory.Exists(InputTextBox.Text) = True)) OrElse (Not (Directory.Exists(OutputTextBox.Text) = True)) Then
-            MsgBox("No path specified, or path invalid!", MsgBoxStyle.Critical, "Error")
-        ElseIf WorkHorse.IsBusy = True Then
+        If WorkHorse.IsBusy Then
+            WatchDog.Stop()
             WatchDogButton.Enabled = False
+            WatchDogButton.Text = "Stopping..."
             WorkHorse.CancelAsync()
-            SkipList.Clear()
-        Else
-            WatchDog.Enabled = Not WatchDog.Enabled
-            WatchDogButton.Text = "Running: " & WatchDog.Enabled
-            SwitchGroups(Not WatchDog.Enabled)
+            StopActiveProcesses()
+            Return
         End If
+
+        If Not Directory.Exists(InputTextBox.Text) OrElse Not Directory.Exists(OutputTextBox.Text) Then
+            MsgBox("No path specified, or path invalid!", MsgBoxStyle.Critical, "Error")
+            Return
+        End If
+
+        WatchDog.Enabled = Not WatchDog.Enabled
+        WatchDogButton.Text = "Running: " & WatchDog.Enabled
+        SwitchGroups(Not WatchDog.Enabled)
     End Sub
 
     Private Sub ThreadComboBox_SelectedIndexChanged(sender As Object, e As EventArgs) Handles ThreadComboBox.SelectedIndexChanged
@@ -815,28 +823,38 @@ Public Class Form1
         If ChainControl.ListItems.Count = 0 Then
             ChainList.Clear()
         End If
+        If e.Cancelled OrElse WatchDogButton.Text = "Stopping..." Then
+            WatchDog.Stop()
+            WatchDog.Enabled = False
+            WatchDogButton.Text = "Running: False"
+            SwitchGroups(True)
+            WatchDogButton.Enabled = True
+            SkipList.Clear()
+            Dim SingleRunPath As String = Path.Combine(Path.GetTempPath(), "Single_0")
+            If Directory.Exists(SingleRunPath) Then Directory.Delete(SingleRunPath, True)
+            Exit Sub
+        End If
         If e.Error IsNot Nothing Then
             WatchDog.Stop()
             WatchDog.Enabled = False
             WatchDogButton.Text = "Running: False"
             WatchDogButton.Enabled = True
             SwitchGroups(True)
+            SkipList.Clear()
             Dim SingleRunPath As String = Path.Combine(Path.GetTempPath(), "Single_0")
             If Directory.Exists(SingleRunPath) Then Directory.Delete(SingleRunPath, True)
             MessageBox.Show("Upscaling failed: " & e.Error.GetBaseException().Message, "AutoCrispy error", MessageBoxButtons.OK, MessageBoxIcon.Error)
             Exit Sub
         End If
-        If e.Cancelled = True Then
-            WatchDog.Enabled = False
-            WatchDogButton.Text = "Running: " & False
-            SwitchGroups(Not WatchDog.Enabled)
-            WatchDogButton.Enabled = True
-            Exit Sub
-        End If
         If WatchDogButton.Text = "Running: True" Then
             WatchDog.Start()
         Else
-            Directory.Delete(Path.GetTempPath & "Single_0", True)
+            WatchDog.Stop()
+            WatchDog.Enabled = False
+            WatchDogButton.Text = "Running: False"
+            WatchDogButton.Enabled = True
+            Dim SingleRunPath As String = Path.Combine(Path.GetTempPath(), "Single_0")
+            If Directory.Exists(SingleRunPath) Then Directory.Delete(SingleRunPath, True)
             SwitchGroups(True)
         End If
     End Sub
@@ -849,7 +867,15 @@ Public Class Form1
         Dim TempPath As String = GetChainPath("Temp", 0)
         Dim ThreadCount As Integer = GetThreads(LoadedSettings.BasicSettings.ThreadIndex, LoadedSettings.BasicSettings.ThreadCount)
         Dim Source As String() = GetMissingFiles(LoadedSettings.Paths.InputPath, LoadedSettings.Paths.OutputPath)
+        If WorkHorse.CancellationPending Then
+            CleanupUpscaleTemporaryFolders()
+            Return
+        End If
         For i = 0 To Source.Count - 1 Step ThreadCount
+            If WorkHorse.CancellationPending Then
+                CleanupUpscaleTemporaryFolders()
+                Return
+            End If
             Dim ChainPaths As New List(Of String)
             Dim DeletedChainPaths As New List(Of String)
             ChainPaths.Add(TempPath)
@@ -861,7 +887,15 @@ Public Class Form1
             ChainPaths.Add(LoadedSettings.Paths.OutputPath)
             Directory.CreateDirectory(TempPath)
             CopyFiles(Source, SkipList, TempPath, i, ThreadCount)
+            If WorkHorse.CancellationPending Then
+                CleanupUpscaleTemporaryFolders()
+                Return
+            End If
             For Each Model In ChainList
+                If WorkHorse.CancellationPending Then
+                    CleanupUpscaleTemporaryFolders()
+                    Return
+                End If
                 Dim NewImages As New List(Of String)
                 Dim DiffImages = GetMissingFiles(ChainPaths(0), LoadedSettings.Paths.OutputPath)
                 For Each NewImage As String In DiffImages
@@ -883,6 +917,10 @@ Public Class Form1
                     End If
                 Next
                 StartBuilder(ChainPaths(0), ChainPaths(1), NewImages, Model)
+                If WorkHorse.CancellationPending Then
+                    CleanupUpscaleTemporaryFolders()
+                    Return
+                End If
                 DeletedChainPaths.Add(ChainPaths(0))
                 ChainPaths.RemoveAt(0)
                 If (ChainList.IndexOf(Model) = ChainList.Count - 1 AndAlso Model.Name <> "TexConv") OrElse (ChainList(ChainList.Count - 1).Name = "TexConv" AndAlso ChainList.IndexOf(Model) = ChainList.Count - 2) Then
@@ -909,13 +947,9 @@ Public Class Form1
                         Next
                     End If
                 End If
-                If WorkHorse.CancellationPending = True Then
-                    Directory.Delete(TempPath, True)
-                    For j = 0 To ChainList.Count - 2
-                        Dim TempName As String = GetChainPath("Chain", j)
-                        Directory.Delete(TempName, True)
-                    Next
-                    Exit Sub
+                If WorkHorse.CancellationPending Then
+                    CleanupUpscaleTemporaryFolders()
+                    Return
                 End If
             Next
             For Each ChainDir As String In DeletedChainPaths
@@ -940,7 +974,7 @@ Public Class Form1
 
     Private Sub CopyFiles(FileList As String(), ByRef SkipList As List(Of String), RootPath As String, ByRef CurrentIndex As Integer, BatchSize As Integer)
         Dim CopyCounter As Integer = 0
-        Do While CopyCounter < BatchSize
+        Do While CopyCounter < BatchSize AndAlso Not WorkHorse.CancellationPending
             Dim FilePath As String = FileList(CurrentIndex)
             If Not SkipList.Contains(FilePath) Then
                 Select Case LoadedSettings.ExpertSettings.AlphaMode
@@ -969,37 +1003,45 @@ Public Class Form1
     End Sub
 
     Private Sub StartBuilder(SourcePath As String, DestPath As String, ImageList As List(Of String), Model As FormSettings.ChainObject)
-        If ImageList.Count > 0 Then
-            Dim BuildProcess As ProcessStartInfo
-            Dim IsSpandrelBackend As Boolean = IsSpandrelPackageType(Model.PackageType)
-            Dim BackendDisplay As String = If(Model.PackageType = DAT2BackendName, "DAT2", If(Model.PackageType = SpandrelBackendName, "Spandrel", "RealPLKSR"))
-            If Model.PackageType = "ESRGAN" OrElse IsSpandrelBackend OrElse Model.PackageType.Contains("Vulkan") Then
-                If IsSpandrelBackend Then
-                    Dim PythonExecutable As String = FindPythonExecutable()
-                    Dim RunnerPath As String = Path.Combine(Application.StartupPath, SpandrelRunnerName)
-                    If PythonExecutable = "" Then
-                        Throw New InvalidOperationException(BackendDisplay & " needs Python 3.10 or newer. Add python.exe to PATH, place it beside AutoCrispy, or set AUTOCRISPY_PYTHON to its full path. See PLKSR_SETUP.md.")
-                    End If
-                    If Not File.Exists(RunnerPath) Then
-                        Throw New FileNotFoundException("The AutoCrispy Spandrel runner was not found.", RunnerPath)
-                    End If
-                    BuildProcess = New ProcessStartInfo(PythonExecutable, MakeCommand(SourcePath, DestPath, Model.PackageType, Model.Package))
-                    BuildProcess.WorkingDirectory = Application.StartupPath
-                Else
-                    BuildProcess = New ProcessStartInfo(Root & Model.FileLocation, MakeCommand(SourcePath, DestPath, Model.PackageType, Model.Package))
-                    BuildProcess.WorkingDirectory = Directory.GetParent(Root & Model.FileLocation).FullName
+        If ImageList.Count = 0 OrElse WorkHorse.CancellationPending Then Return
+
+        Dim BuildProcess As ProcessStartInfo
+        Dim IsSpandrelBackend As Boolean = IsSpandrelPackageType(Model.PackageType)
+        Dim BackendDisplay As String = If(Model.PackageType = DAT2BackendName, "DAT2", If(Model.PackageType = SpandrelBackendName, "Spandrel", "RealPLKSR"))
+        If Model.PackageType = "ESRGAN" OrElse IsSpandrelBackend OrElse Model.PackageType.Contains("Vulkan") Then
+            If IsSpandrelBackend Then
+                Dim PythonExecutable As String = FindPythonExecutable()
+                Dim RunnerPath As String = Path.Combine(Application.StartupPath, SpandrelRunnerName)
+                If PythonExecutable = "" Then
+                    Throw New InvalidOperationException(BackendDisplay & " needs Python 3.10 or newer. Add python.exe to PATH, place it beside AutoCrispy, or set AUTOCRISPY_PYTHON to its full path. See PLKSR_SETUP.md.")
                 End If
-                BuildProcess.RedirectStandardOutput = True
-                BuildProcess.RedirectStandardError = True
-                BuildProcess.UseShellExecute = False
-                BuildProcess.CreateNoWindow = True
-                Dim BatchProcess As Process = Process.Start(BuildProcess)
+                If Not File.Exists(RunnerPath) Then
+                    Throw New FileNotFoundException("The AutoCrispy Spandrel runner was not found.", RunnerPath)
+                End If
+                BuildProcess = New ProcessStartInfo(PythonExecutable, MakeCommand(SourcePath, DestPath, Model.PackageType, Model.Package))
+                BuildProcess.WorkingDirectory = Application.StartupPath
+            Else
+                BuildProcess = New ProcessStartInfo(Root & Model.FileLocation, MakeCommand(SourcePath, DestPath, Model.PackageType, Model.Package))
+                BuildProcess.WorkingDirectory = Directory.GetParent(Root & Model.FileLocation).FullName
+            End If
+            BuildProcess.RedirectStandardOutput = True
+            BuildProcess.RedirectStandardError = True
+            BuildProcess.UseShellExecute = False
+            BuildProcess.CreateNoWindow = True
+            Dim BatchProcess As Process = Process.Start(BuildProcess)
+            If BatchProcess Is Nothing Then Throw New InvalidOperationException("Failed to start " & BackendDisplay & ".")
+            RegisterActiveProcess(BatchProcess)
+            Try
                 If IsSpandrelBackend Then
                     Dim StandardOutputTask = BatchProcess.StandardOutput.ReadToEndAsync()
                     Dim StandardErrorTask = BatchProcess.StandardError.ReadToEndAsync()
-                    BatchProcess.WaitForExit()
+                    WaitForActiveProcess(BatchProcess)
                     Dim StandardOutput As String = StandardOutputTask.Result
                     Dim StandardError As String = StandardErrorTask.Result
+                    If WorkHorse.CancellationPending Then
+                        DeleteCancelledOutputs(DestPath, ImageList)
+                        Return
+                    End If
                     If LoadedSettings.ExpertSettings.Logging OrElse BatchProcess.ExitCode <> 0 Then
                         WriteProcessLog(BuildProcess, StandardOutput, StandardError, LoadedSettings.Paths.OutputPath, Model.PackageType)
                     End If
@@ -1009,14 +1051,27 @@ Public Class Form1
                         Throw New InvalidOperationException(BackendDisplay & " inference failed (exit code " & BatchProcess.ExitCode.ToString() & "). " & Details)
                     End If
                 Else
-                    BatchProcess.WaitForExit()
+                    WaitForActiveProcess(BatchProcess)
+                    If WorkHorse.CancellationPending Then
+                        DeleteCancelledOutputs(DestPath, ImageList)
+                        Return
+                    End If
                     If LoadedSettings.ExpertSettings.Logging = True Then
                         WriteLog(BatchProcess, LoadedSettings.Paths.OutputPath)
                     End If
                 End If
-            Else
-                Dim ProcessBag As New List(Of Process)
+            Finally
+                UnregisterActiveProcess(BatchProcess)
+                BatchProcess.Dispose()
+            End Try
+        Else
+            Dim ProcessBag As New List(Of Process)
+            Try
                 For j = 0 To ImageList.Count - 1
+                    If WorkHorse.CancellationPending Then
+                        StopActiveProcesses()
+                        Exit For
+                    End If
                     Dim NewImage As String = DestPath & "\" & Path.GetFileName(ImageList(j))
                     BuildProcess = New ProcessStartInfo(Root & Model.FileLocation, MakeCommand(ImageList(j), NewImage, Model.PackageType, Model.Package))
                     BuildProcess.WorkingDirectory = Directory.GetParent(Root & Model.FileLocation).FullName
@@ -1025,25 +1080,102 @@ Public Class Form1
                     BuildProcess.UseShellExecute = False
                     BuildProcess.CreateNoWindow = True
                     Dim BatchProcess As Process = Process.Start(BuildProcess)
+                    If BatchProcess Is Nothing Then Throw New InvalidOperationException("Failed to start " & Model.PackageType & ".")
                     ProcessBag.Add(BatchProcess)
+                    RegisterActiveProcess(BatchProcess)
                     If LoadedSettings.ExpertSettings.Logging = True Then
                         WriteLog(BatchProcess, LoadedSettings.Paths.OutputPath)
                     End If
                 Next
+
                 Do
-                    Dim CompletionStatus As New List(Of Boolean)
+                    If WorkHorse.CancellationPending Then StopActiveProcesses()
+                    Dim AnyProcessRunning As Boolean = False
                     For Each Job As Process In ProcessBag
-                        CompletionStatus.Add(Job.HasExited)
+                        If Not Job.HasExited Then AnyProcessRunning = True
                     Next
-                    If Not CompletionStatus.Contains(False) Then
-                        Exit Do
-                    End If
+                    If Not AnyProcessRunning Then Exit Do
+                    Threading.Thread.Sleep(50)
                 Loop
-            End If
-            For Each TempImage As String In Directory.GetFiles(SourcePath)
-                File.Delete(TempImage)
-            Next
+
+                If WorkHorse.CancellationPending Then
+                    DeleteCancelledOutputs(DestPath, ImageList)
+                    Return
+                End If
+            Finally
+                For Each Job As Process In ProcessBag
+                    UnregisterActiveProcess(Job)
+                    Job.Dispose()
+                Next
+            End Try
         End If
+
+        For Each TempImage As String In Directory.GetFiles(SourcePath)
+            File.Delete(TempImage)
+        Next
+    End Sub
+
+    Private Sub RegisterActiveProcess(ActiveProcess As Process)
+        SyncLock ActiveProcessLock
+            ActiveProcesses.Add(ActiveProcess)
+        End SyncLock
+        ' Cancellation can arrive between Process.Start and registration. Recheck here
+        ' so that a process created in that window is terminated before we wait on it.
+        If WorkHorse.CancellationPending Then StopActiveProcesses()
+    End Sub
+
+    Private Sub UnregisterActiveProcess(ActiveProcess As Process)
+        SyncLock ActiveProcessLock
+            ActiveProcesses.Remove(ActiveProcess)
+        End SyncLock
+    End Sub
+
+    Private Sub StopActiveProcesses()
+        Dim ProcessesToStop As New List(Of Process)
+        SyncLock ActiveProcessLock
+            ProcessesToStop.AddRange(ActiveProcesses)
+        End SyncLock
+        For Each ActiveProcess As Process In ProcessesToStop
+            Try
+                If Not ActiveProcess.HasExited Then ActiveProcess.Kill()
+            Catch ex As Exception
+                ' A process may exit between HasExited and Kill.
+            End Try
+        Next
+    End Sub
+
+    Private Sub WaitForActiveProcess(ActiveProcess As Process)
+        While Not ActiveProcess.WaitForExit(200)
+            If WorkHorse.CancellationPending Then StopActiveProcesses()
+        End While
+    End Sub
+
+    Private Sub DeleteCancelledOutputs(DestPath As String, ImageList As List(Of String))
+        For Each ImagePath As String In ImageList
+            Dim OutputPath As String = Path.Combine(DestPath, Path.GetFileName(ImagePath))
+            Try
+                If File.Exists(OutputPath) AndAlso
+                    Not String.Equals(Path.GetFullPath(OutputPath), Path.GetFullPath(ImagePath), StringComparison.OrdinalIgnoreCase) Then
+                    File.Delete(OutputPath)
+                End If
+            Catch ex As Exception
+                System.Diagnostics.Debug.WriteLine("Could not remove cancelled output: " & ex.Message)
+            End Try
+        Next
+    End Sub
+
+    Private Sub CleanupUpscaleTemporaryFolders()
+        Dim TemporaryFolders As New List(Of String) From {GetChainPath("Temp", 0)}
+        For j = 0 To ChainList.Count - 2
+            TemporaryFolders.Add(GetChainPath("Chain", j))
+        Next
+        For Each TemporaryFolder As String In TemporaryFolders
+            Try
+                If Directory.Exists(TemporaryFolder) Then Directory.Delete(TemporaryFolder, True)
+            Catch ex As Exception
+                System.Diagnostics.Debug.WriteLine("Could not remove cancelled working folder: " & ex.Message)
+            End Try
+        Next
     End Sub
 
     Private Function IsSpandrelPackageType(PackageType As String) As Boolean
