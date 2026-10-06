@@ -15,6 +15,13 @@ Public Class Form1
     Dim SkipList As New List(Of String)
     Private LastSelectedSpandrelModelPath As String = ""
     Private ReadOnly UiToolTip As New ToolTip()
+    Private WatcherEnabled As Boolean
+    Private StopRequested As Boolean
+    Private SettingsLoaded As Boolean
+    Private SuppressCleanupPrompt As Boolean
+    Private WatchScanRunning As Boolean
+    Private ProgressScanRunning As Boolean
+    Private ChainScrollPanel As Panel
 
     Const HotToggle As String = "%`"
 
@@ -89,11 +96,22 @@ Public Class Form1
 
 #Region "Loading"
 
+    Public Sub New()
+        InitializeComponent()
+        HideBackendGroups()
+        ApplyStaticUiFixes()
+    End Sub
+
     Private Async Sub Form1_Load(sender As Object, e As EventArgs) Handles MyBase.Load
         Me.SetStyle(ControlStyles.OptimizedDoubleBuffer, True)
         Application.CurrentCulture = New Globalization.CultureInfo("EN-US")
         PreloadImageList()
+        PrepareChainViewport()
         ChainControl = New DragDropList(ChainPreview, 7)
+        AddHandler ChainControl.ItemsReordered, AddressOf SyncChainListFromPreview
+        AddHandler ChainControl.DeleteRequested, AddressOf RemoveSelectedChainItem
+        AddHandler ChainControl.EditRequested, AddressOf EditSelectedChainItem
+        AddHandler ChainControl.SelectionChanged, AddressOf UpdateChainCommandState
         Try
             If File.Exists(Root & "\portable.xml") Then
                 FormSettings.LoadSettings(Me, Deserialize(Of FormSettings.Settings)(File.ReadAllText(Root & "\portable.xml")))
@@ -121,8 +139,10 @@ Public Class Form1
             SetSettingsWindow()
         End If
         Await RefreshSupportedSpandrelModels(Root)
+        If ChainControl.ListItems.Count > 0 Then ChainControl.SelectedIndex = 0
         ChainControl.DrawList(ChainControl.ListItems)
-        WatchDogButton.Select()
+        UpdateChainCommandState()
+        SettingsLoaded = True
         ' Show the current input/output completion immediately, then keep it refreshed.
         ProgressPollTimer.Enabled = True
         ProgressPollTimer_Tick(ProgressPollTimer, EventArgs.Empty)
@@ -280,7 +300,7 @@ Public Class Form1
         If SetupProblem <> "" Then
             SetModelScanStatus(SetupProblem)
             If ScanGeneration = SpandrelScanGeneration AndAlso Not IsDisposed Then
-                WatchDogButton.Enabled = True
+                RestoreWatcherButtonAfterScan()
                 RefreshSpandrelModelsButton.Enabled = True
                 If String.Equals(If(ExeComboBox.SelectedItem, "").ToString(), SpandrelBackendName, StringComparison.OrdinalIgnoreCase) Then
                     ConfigurePythonModelSelector(SpandrelBackendName)
@@ -289,7 +309,10 @@ Public Class Form1
             Return
         End If
 
-        WatchDogButton.Enabled = False
+        If String.Equals(If(ExeComboBox.SelectedItem, "").ToString(), SpandrelBackendName, StringComparison.OrdinalIgnoreCase) AndAlso
+            Not WorkHorse.IsBusy AndAlso Not StopRequested Then
+            WatchDogButton.Enabled = False
+        End If
         RefreshSpandrelModelsButton.Enabled = False
         SetModelScanStatus("Scanning checkpoints for compatible 1× restoration and 4× SR models…")
         Dim DebugEnabled As Boolean = DebugCheckbox.Checked
@@ -334,7 +357,7 @@ Public Class Form1
         Finally
             If ScanGeneration = SpandrelScanGeneration Then
                 SpandrelScanCancellation = Nothing
-                If Not IsDisposed Then WatchDogButton.Enabled = True
+                RestoreWatcherButtonAfterScan()
                 If Not IsDisposed Then RefreshSpandrelModelsButton.Enabled = True
             End If
             ScanCancellation.Dispose()
@@ -344,13 +367,13 @@ Public Class Form1
     Private Sub SetModelScanStatus(Message As String)
         If IsDisposed OrElse SpandrelScanStatusLabel Is Nothing Then Return
         SpandrelScanStatusLabel.Text = Message
-        BackendStatusLabel.Text = "Spandrel: " & Message
         UiToolTip.SetToolTip(SpandrelScanStatusLabel, Message)
-        UiToolTip.SetToolTip(BackendStatusLabel, Message)
-        If Not WorkHorse.IsBusy Then
-            QueueActivityLabel.Text = Message
-            UiToolTip.SetToolTip(QueueActivityLabel, Message)
-        End If
+        UiToolTip.SetToolTip(RefreshSpandrelModelsButton, Message)
+    End Sub
+
+    Private Sub RestoreWatcherButtonAfterScan()
+        If IsDisposed OrElse WorkHorse.IsBusy OrElse StopRequested Then Return
+        WatchDogButton.Enabled = True
     End Sub
 
     Private Function ScanSpandrelModelFolders(ModelFolders As List(Of String), PythonExecutable As String, RunnerPath As String, DebugEnabled As Boolean, ScanToken As CancellationToken) As List(Of SpandrelModelInfo)
@@ -578,15 +601,15 @@ Public Class Form1
     End Sub
 
     Private Sub InputBrowse_Click(sender As Object, e As EventArgs) Handles InputBrowse.Click
-        InputTextBox.Text = GetFolder()
+        BrowseFolderInto(InputTextBox, "Choose the folder textures are dumped into.")
     End Sub
 
     Private Sub OutputBrowse_Click(sender As Object, e As EventArgs) Handles OutputBrowse.Click
-        OutputTextBox.Text = GetFolder()
+        BrowseFolderInto(OutputTextBox, "Choose the folder upscaled textures should be written to.")
     End Sub
 
     Private Sub ExeBrowse_Click(sender As Object, e As EventArgs) Handles ExeBrowse.Click
-        ExeTextBox.Text = GetFolder()
+        BrowseFolderInto(ExeTextBox, "Choose the folder that contains the upscale backends.")
     End Sub
 
     Private Async Sub ExeTextBox_TextChanged(sender As Object, e As EventArgs) Handles ExeTextBox.TextChanged
@@ -611,63 +634,100 @@ Public Class Form1
     End Sub
 
     Private Sub ChainSave_Click(sender As Object, e As EventArgs) Handles ChainSave.Click
-        Using SFD As New SaveFileDialog With {.Filter = "XML Files|*.xml|All Files|*.*"}
-            If SFD.ShowDialog = DialogResult.OK Then
+        Using SFD As New SaveFileDialog With {.Filter = "XML Files|*.xml|All Files|*.*", .Title = "Save chain"}
+            If SFD.ShowDialog <> DialogResult.OK Then Return
+            Try
                 File.WriteAllText(SFD.FileName, Serialize(ChainList))
-            End If
+            Catch ex As Exception
+                MessageBox.Show("Could not save the chain." & Environment.NewLine & ex.Message, "AutoCrispy", MessageBoxButtons.OK, MessageBoxIcon.Error)
+            End Try
         End Using
     End Sub
 
     Private Sub ChainLoad_Click(sender As Object, e As EventArgs) Handles ChainLoad.Click
-        Using OFD As New OpenFileDialog With {.Filter = "XML Files|*.xml|All Files|*.*"}
-            If OFD.ShowDialog = DialogResult.OK Then
-                ChainControl.ListItems.Clear()
-                ChainList.Clear()
-                ChainList = Deserialize(Of List(Of FormSettings.ChainObject))(File.ReadAllText(OFD.FileName))
-                For Each ChainItem As FormSettings.ChainObject In ChainList
-                    ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.IndexOf(ChainItem), ChainItem.Name, ChainThumbs.Item(ChainItem.IconIndex)))
+        Using OFD As New OpenFileDialog With {.Filter = "XML Files|*.xml|All Files|*.*", .Title = "Load chain"}
+            If OFD.ShowDialog <> DialogResult.OK Then Return
+            Dim PreviousChain As List(Of FormSettings.ChainObject) = ChainList.ToList()
+            Dim PreviousItems As New List(Of DragDropList.DragDropItem)(ChainControl.ListItems)
+            Dim PreviousSelection As Integer = ChainControl.SelectedIndex
+            Try
+                Dim LoadedChain As List(Of FormSettings.ChainObject) = Deserialize(Of List(Of FormSettings.ChainObject))(File.ReadAllText(OFD.FileName))
+                If LoadedChain Is Nothing Then Throw New InvalidDataException("The file did not contain a chain.")
+                Dim NewItems As New List(Of DragDropList.DragDropItem)
+                For ItemIndex As Integer = 0 To LoadedChain.Count - 1
+                    Dim ChainItem As FormSettings.ChainObject = LoadedChain(ItemIndex)
+                    If ChainItem.IconIndex < 0 OrElse ChainItem.IconIndex >= ChainThumbs.Count Then
+                        Throw New InvalidDataException("The icon index for """ & ChainItem.Name & """ is out of range.")
+                    End If
+                    NewItems.Add(New DragDropList.DragDropItem(ItemIndex, ChainItem.Name, ChainThumbs(ChainItem.IconIndex)))
                 Next
+                ChainList = LoadedChain
+                ChainControl.ListItems.Clear()
+                ChainControl.ListItems.AddRange(NewItems)
+                ChainControl.SelectedIndex = If(NewItems.Count = 0, -1, 0)
                 If GetPreferredSpandrelBackendIndex() >= 0 Then ReplaceLegacyUpscalerChain()
                 ChainControl.DrawList(ChainControl.ListItems)
-            End If
+                UpdateChainCommandState()
+            Catch ex As Exception
+                ChainList = PreviousChain
+                ChainControl.ListItems.Clear()
+                ChainControl.ListItems.AddRange(PreviousItems)
+                ChainControl.SelectedIndex = PreviousSelection
+                ChainControl.DrawList(ChainControl.ListItems)
+                UpdateChainCommandState()
+                MessageBox.Show("Could not load that chain. The current chain was kept." & Environment.NewLine & ex.Message, "AutoCrispy", MessageBoxButtons.OK, MessageBoxIcon.Error)
+            End Try
         End Using
     End Sub
 
     Private Sub ChainAdd_Click(sender As Object, e As EventArgs) Handles ChainAdd.Click
-        AddModelToChain(ExeComboBox.SelectedItem)
+        If ExeComboBox.SelectedItem Is Nothing Then
+            MessageBox.Show("Choose a backend before adding it to the chain.", "AutoCrispy", MessageBoxButtons.OK, MessageBoxIcon.Information)
+            Return
+        End If
+        AddModelToChain(ExeComboBox.SelectedItem.ToString())
     End Sub
 
-    Private Sub RemoveItemFromChain(sender As Object, e As EventArgs) Handles ChainContextDelete.Click
-        Dim Remove As Integer = ChainControl.GetCurrentIndex
-        ChainList.RemoveAt(Remove)
-        ChainControl.ListItems.RemoveAt(Remove)
+    Private Sub RemoveSelectedChainItem(sender As Object, e As EventArgs) Handles ChainRemove.Click, ChainContextDelete.Click
+        If ChainControl Is Nothing Then Return
+        Dim RemoveIndex As Integer = ChainControl.SelectedIndex
+        If RemoveIndex < 0 OrElse RemoveIndex >= ChainList.Count OrElse RemoveIndex >= ChainControl.ListItems.Count Then Return
+        ChainList.RemoveAt(RemoveIndex)
+        ChainControl.ListItems.RemoveAt(RemoveIndex)
         ChainControl.ReorderList()
+        If ChainControl.ListItems.Count = 0 Then
+            ChainControl.SelectedIndex = -1
+        Else
+            ChainControl.SelectedIndex = Math.Min(RemoveIndex, ChainControl.ListItems.Count - 1)
+        End If
         ChainControl.DrawList(ChainControl.ListItems)
+        UpdateChainCommandState()
     End Sub
 
-    Private Sub ChainContextEdit_Click(sender As Object, e As EventArgs) Handles ChainContextEdit.Click
-        Dim ItemIndex As Integer = ChainControl.GetCurrentIndex
+    Private Sub EditSelectedChainItem(sender As Object, e As EventArgs) Handles ChainContextEdit.Click
+        If ChainControl Is Nothing Then Return
+        Dim ItemIndex As Integer = ChainControl.SelectedIndex
+        If ItemIndex < 0 OrElse ItemIndex >= ChainList.Count OrElse ItemIndex >= ChainControl.ListItems.Count Then Return
         Using ECD As New EditChainDialog(Serialize(ChainList(ItemIndex)))
-            If ECD.ShowDialog = DialogResult.OK Then
-                Try
-                    Dim NewChainItem As FormSettings.ChainObject = Deserialize(Of FormSettings.ChainObject)(ECD.ResultText)
-                    ChainList(ItemIndex) = NewChainItem
-                Catch ex As Exception
-                    MsgBox("Error: New settings could not be parsed.")
-                End Try
-            End If
+            If ECD.ShowDialog <> DialogResult.OK Then Return
+            Try
+                Dim NewChainItem As FormSettings.ChainObject = Deserialize(Of FormSettings.ChainObject)(ECD.ResultText)
+                If NewChainItem.IconIndex < 0 OrElse NewChainItem.IconIndex >= ChainThumbs.Count Then
+                    MessageBox.Show("Icon index is out of range.", "AutoCrispy", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+                    Return
+                End If
+                ChainList(ItemIndex) = NewChainItem
+                ChainControl.ListItems(ItemIndex) = New DragDropList.DragDropItem(ItemIndex, NewChainItem.Name, ChainThumbs(NewChainItem.IconIndex))
+                ChainControl.DrawList(ChainControl.ListItems)
+            Catch ex As Exception
+                MessageBox.Show("The new settings could not be parsed." & Environment.NewLine & ex.Message, "AutoCrispy", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+            End Try
         End Using
     End Sub
 
-    Private Sub ChainPreview_MouseUp(sender As Object, e As MouseEventArgs) Handles ChainPreview.MouseUp
-        If e.Button = MouseButtons.Left Then
-            Dim TempList As New List(Of FormSettings.ChainObject)
-            For Each Item As DragDropList.DragDropItem In ChainControl.ListItems
-                TempList.Add(ChainList(Item.Index))
-            Next
-            ChainList = TempList
-            ChainControl.ReorderList()
-        End If
+    Private Sub ChainContext_Opening(sender As Object, e As System.ComponentModel.CancelEventArgs) Handles ChainContext.Opening
+        UpdateChainCommandState()
+        If ChainControl Is Nothing OrElse ChainControl.SelectedIndex < 0 Then e.Cancel = True
     End Sub
 
     Private Sub DDxFormatListBox_SelectedIndexChanged(sender As Object, e As EventArgs) Handles DDxFormatListBox.SelectedIndexChanged
@@ -684,48 +744,68 @@ Public Class Form1
     End Sub
 
     Private Sub RunOnceButton_Click(sender As Object, e As EventArgs) Handles RunOnceButton.Click
-        Using OFD As New OpenFileDialog With {.Filter = "Image Files|*.png;*.jpg;*.bmp"}
-            If OFD.ShowDialog = DialogResult.OK Then
-                Using SFD As New SaveFileDialog With {.Filter = "PNG Images|*.png"}
-                    If SFD.ShowDialog = DialogResult.OK Then
-                        Dim TempPath As String = Path.GetTempPath & "Single_0"
-                        Directory.CreateDirectory(Path.GetTempPath & "Single_0")
-                        File.Copy(OFD.FileName, TempPath & "\" & Path.GetFileName(SFD.FileName), True)
-                        QueueActivityLabel.Text = "Starting one-off image run…"
-                        LoadedSettings = New FormSettings.Settings(Me)
-                        LoadedSettings.Paths = New FormSettings.ProgramPaths(TempPath, Directory.GetParent(SFD.FileName).FullName, Root)
-                        If ChainControl.ListItems.Count = 0 Then
-                            AddModelToChain(ExeComboBox.SelectedItem, False)
-                        End If
-                        SwitchGroups(False)
-                        ProgressPollTimer.Interval = 1000
-                        WorkHorse.RunWorkerAsync()
+        If WorkHorse.IsBusy OrElse WatchDog.Enabled Then
+            MessageBox.Show("Stop the current run before upscaling a single image.", "AutoCrispy", MessageBoxButtons.OK, MessageBoxIcon.Information)
+            Return
+        End If
+        Using OFD As New OpenFileDialog With {.Filter = "Image Files|*.png;*.jpg;*.bmp", .Title = "Choose an image"}
+            If OFD.ShowDialog <> DialogResult.OK Then Return
+            Using SFD As New SaveFileDialog With {.Filter = "PNG Images|*.png", .Title = "Save upscaled image"}
+                If SFD.ShowDialog <> DialogResult.OK Then Return
+                Dim TempPath As String = Path.Combine(Path.GetTempPath(), "Single_0")
+                Try
+                    Directory.CreateDirectory(TempPath)
+                    File.Copy(OFD.FileName, Path.Combine(TempPath, Path.GetFileName(SFD.FileName)), True)
+                    QueueActivityLabel.Text = "Starting one-off image run…"
+                    LoadedSettings = New FormSettings.Settings(Me)
+                    LoadedSettings.Paths = New FormSettings.ProgramPaths(TempPath, Directory.GetParent(SFD.FileName).FullName, Root)
+                    If ChainControl.ListItems.Count = 0 AndAlso Not AddModelToChain(If(ExeComboBox.SelectedItem, "").ToString(), False) Then
+                        If Directory.Exists(TempPath) Then Directory.Delete(TempPath, True)
+                        QueueActivityLabel.Text = "Choose a backend before upscaling"
+                        MessageBox.Show("Choose a backend before upscaling.", "AutoCrispy", MessageBoxButtons.OK, MessageBoxIcon.Information)
+                        Return
                     End If
-                End Using
-            End If
+                    WatcherEnabled = False
+                    StopRequested = False
+                    SwitchGroups(False)
+                    ProgressPollTimer.Interval = 1000
+                    WorkHorse.RunWorkerAsync()
+                Catch ex As Exception
+                    SwitchGroups(True)
+                    If Not WorkHorse.IsBusy AndAlso Directory.Exists(TempPath) Then Directory.Delete(TempPath, True)
+                    MessageBox.Show("Could not start the image run." & Environment.NewLine & ex.Message, "AutoCrispy", MessageBoxButtons.OK, MessageBoxIcon.Error)
+                End Try
+            End Using
         End Using
     End Sub
 
     Private Sub WatchDogButton_Click(sender As Object, e As EventArgs) Handles WatchDogButton.Click
         If WorkHorse.IsBusy Then
             WatchDog.Stop()
-            WatchDogButton.Enabled = False
-            WatchDogButton.Text = "Stopping..."
+            SetWatcherButtonStopping()
             QueueActivityLabel.Text = "Stopping active processing…"
             WorkHorse.CancelAsync()
             StopActiveProcesses()
             Return
         End If
 
-        If Not Directory.Exists(InputTextBox.Text) OrElse Not Directory.Exists(OutputTextBox.Text) Then
-            MsgBox("No path specified, or path invalid!", MsgBoxStyle.Critical, "Error")
+        If WatchDog.Enabled Then
+            WatchDog.Enabled = False
+            SetWatcherButtonIdle()
+            QueueActivityLabel.Text = "Watcher stopped"
+            SwitchGroups(True)
             Return
         End If
 
-        WatchDog.Enabled = Not WatchDog.Enabled
-        WatchDogButton.Text = "Running: " & WatchDog.Enabled
-        QueueActivityLabel.Text = If(WatchDog.Enabled, "Watching for new textures…", "Watcher stopped")
-        SwitchGroups(Not WatchDog.Enabled)
+        If Not Directory.Exists(InputTextBox.Text) OrElse Not Directory.Exists(OutputTextBox.Text) Then
+            MessageBox.Show("Choose a valid input folder and output folder first.", "AutoCrispy", MessageBoxButtons.OK, MessageBoxIcon.Error)
+            Return
+        End If
+
+        WatchDog.Enabled = True
+        SetWatcherButtonRunning()
+        QueueActivityLabel.Text = "Watching for new textures…"
+        SwitchGroups(False)
     End Sub
 
     Private Sub ThreadComboBox_SelectedIndexChanged(sender As Object, e As EventArgs) Handles ThreadComboBox.SelectedIndexChanged
@@ -734,6 +814,19 @@ Public Class Form1
         Else
             NumericThreads.Enabled = False
         End If
+        If SettingsLoaded AndAlso ThreadComboBox.SelectedIndex = 3 Then
+            Dim Answer As DialogResult = MessageBox.Show("Max starts up to 512 processes and can exhaust memory. Continue?", "High thread count", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2)
+            If Answer <> DialogResult.Yes Then ThreadComboBox.SelectedIndex = 0
+        End If
+    End Sub
+
+    Private Sub CleanupCheckBox_CheckedChanged(sender As Object, e As EventArgs) Handles CleanupCheckBox.CheckedChanged
+        If Not SettingsLoaded OrElse SuppressCleanupPrompt OrElse Not CleanupCheckBox.Checked Then Return
+        Dim Answer As DialogResult = MessageBox.Show("Delete each input file after it has been upscaled? This cannot be undone.", "Delete input files", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2)
+        If Answer = DialogResult.Yes Then Return
+        SuppressCleanupPrompt = True
+        CleanupCheckBox.Checked = False
+        SuppressCleanupPrompt = False
     End Sub
 
     Private Sub SeamsBox_SelectedIndexChanged(sender As Object, e As EventArgs) Handles SeamsBox.SelectedIndexChanged
@@ -797,22 +890,22 @@ Public Class Form1
             Case "ESRGAN"
                 ConfigurePythonModelSelector("ESRGAN")
                 PyGroup.Text = "ESRGAN"
-                TileSizeHint.Text = "0 = no tiling; the full image must fit in available memory."
+                SetWrappedHint(TileSizeHint, "0 = no tiling; the full image must fit in available memory.")
                 MoveShowGroup(PyGroup)
             Case PLKSRBackendName
                 ConfigurePythonModelSelector(PLKSRBackendName)
                 PyGroup.Text = "PLKSR"
-                TileSizeHint.Text = "0 = full image first; falls back to smaller tiles on GPU memory errors."
+                SetWrappedHint(TileSizeHint, "0 = full image first; falls back to smaller tiles on GPU memory errors.")
                 MoveShowGroup(PyGroup)
             Case DAT2BackendName
                 ConfigurePythonModelSelector(DAT2BackendName)
                 PyGroup.Text = "PBRify DAT2"
-                TileSizeHint.Text = "0 = full image first; falls back to smaller tiles on GPU memory errors."
+                SetWrappedHint(TileSizeHint, "0 = full image first; falls back to smaller tiles on GPU memory errors.")
                 MoveShowGroup(PyGroup)
             Case SpandrelBackendName
                 ConfigurePythonModelSelector(SpandrelBackendName)
                 PyGroup.Text = "Spandrel"
-                TileSizeHint.Text = "0 = full image first; falls back to smaller tiles on GPU memory errors."
+                SetWrappedHint(TileSizeHint, "0 = full image first; falls back to smaller tiles on GPU memory errors.")
                 MoveShowGroup(PyGroup)
         End Select
         UpdateSpandrelModelInfo()
@@ -854,21 +947,22 @@ Public Class Form1
         If Not IsSpandrelSelected Then Return
 
         If PyModel.SelectedIndex < 0 OrElse PyModel.SelectedIndex >= SupportedSpandrelModels.Count Then
-            SpandrelModelInfoLabel.Text = "No compatible model is selected. Refresh the scan or check your setup."
-            UiToolTip.SetToolTip(SpandrelModelInfoLabel, "")
+            SetWrappedHint(SpandrelModelInfoLabel, "No compatible model is selected. Refresh the scan or check your setup.")
+            UiToolTip.SetToolTip(PyModel, "")
             Return
         End If
 
         Dim Model As SpandrelModelInfo = SupportedSpandrelModels(PyModel.SelectedIndex)
+        Dim ModelSummary As String
         If Model.Scale > 0 Then
             Dim ScaleDescription As String = If(Model.Scale = 1, "preserves image dimensions", "enlarges " & Model.Scale.ToString() & "×")
-            SpandrelModelInfoLabel.Text = "Architecture: " & Model.Architecture & " · " & Model.Scale.ToString() & "× " & Model.Purpose &
+            ModelSummary = "Architecture: " & Model.Architecture & " · " & Model.Scale.ToString() & "× " & Model.Purpose &
                 " · RGB " & Model.InputChannels.ToString() & "→" & Model.OutputChannels.ToString() & " · " & ScaleDescription
         Else
-            SpandrelModelInfoLabel.Text = "Architecture: " & Model.Architecture & " · Spandrel-compatible image model"
+            ModelSummary = "Architecture: " & Model.Architecture & " · Spandrel-compatible image model"
         End If
-        UiToolTip.SetToolTip(SpandrelModelInfoLabel, Model.FilePath)
-        UiToolTip.SetToolTip(PyModel, Model.FilePath)
+        SetWrappedHint(SpandrelModelInfoLabel, ModelSummary & Environment.NewLine & Model.FilePath)
+        UiToolTip.SetToolTip(PyModel, ModelSummary & Environment.NewLine & Model.FilePath)
     End Sub
 
     Private Sub PyModel_SelectedIndexChanged(sender As Object, e As EventArgs) Handles PyModel.SelectedIndexChanged
@@ -907,71 +1001,146 @@ Public Class Form1
         WaifuCPPGroup.Enabled = Enabled
         AnimeCPPGroup.Enabled = Enabled
         DDxGroup.Enabled = Enabled
+        xBRZGroup.Enabled = Enabled
         PyGroup.Enabled = Enabled
+        RunOnceButton.Enabled = Enabled
+        UpdateChainCommandState()
     End Sub
 
 #End Region
 
 #Region "Background"
 
-    Private Sub WatchDog_Tick(sender As Object, e As EventArgs) Handles WatchDog.Tick
-        Dim Source = Directory.GetFiles(InputTextBox.Text, "*.*", SearchOption.AllDirectories).Count
-        Dim FileCheck = GetMissingFiles(InputTextBox.Text, OutputTextBox.Text).Count
-        If Source = 0 OrElse FileCheck = 0 Then
-            QueueActivityLabel.Text = "Watching for new textures…"
-            WaitScale = Math.Min(WaitScale + 1, 100)
-            WatchDog.Interval = 1000 + (WaitScale * 590)
-        Else
+    Private Async Sub WatchDog_Tick(sender As Object, e As EventArgs) Handles WatchDog.Tick
+        If WatchScanRunning OrElse WorkHorse.IsBusy OrElse Not WatcherEnabled Then Return
+        WatchScanRunning = True
+        Dim InputPath As String = InputTextBox.Text
+        Dim OutputPath As String = OutputTextBox.Text
+        Try
+            Dim Snapshot As ProgressSnapshot = Await Task.Run(Function() ReadWatchSnapshot(InputPath, OutputPath))
+            If IsDisposed OrElse Not WatcherEnabled OrElse WorkHorse.IsBusy Then Return
+            If Snapshot.Failed Then
+                QueueActivityLabel.Text = "Could not read the input folder"
+                UiToolTip.SetToolTip(QueueActivityLabel, Snapshot.ErrorMessage)
+                WaitScale = Math.Min(WaitScale + 1, 100)
+                WatchDog.Interval = 1000 + (WaitScale * 590)
+                Return
+            End If
+            If Snapshot.SourceCount = 0 OrElse Snapshot.MissingCount = 0 Then
+                QueueActivityLabel.Text = "Watching for new textures…"
+                WaitScale = Math.Min(WaitScale + 1, 100)
+                WatchDog.Interval = 1000 + (WaitScale * 590)
+                Return
+            End If
             QueueActivityLabel.Text = "Starting next batch…"
             WaitScale = 0
             WatchDog.Interval = 1000
             LoadedSettings = New FormSettings.Settings(Me)
-            If ChainControl.ListItems.Count = 0 Then
-                AddModelToChain(ExeComboBox.SelectedItem, False)
+            If ChainControl.ListItems.Count = 0 AndAlso Not AddModelToChain(If(ExeComboBox.SelectedItem, "").ToString(), False) Then
+                WatchDog.Enabled = False
+                SetWatcherButtonIdle()
+                SwitchGroups(True)
+                QueueActivityLabel.Text = "Choose a backend before watching"
+                Return
             End If
             ProgressPollTimer.Interval = 1000
-            WorkHorse.RunWorkerAsync()
-        End If
+            If Not WorkHorse.IsBusy Then WorkHorse.RunWorkerAsync()
+        Catch ex As Exception
+            If Not IsDisposed Then
+                QueueActivityLabel.Text = "Could not read the input folder"
+                UiToolTip.SetToolTip(QueueActivityLabel, ex.GetBaseException().Message)
+            End If
+        Finally
+            WatchScanRunning = False
+        End Try
     End Sub
 
     ' Progress is overall completion: inputs with matching output files divided by all inputs.
     ' Match by basename so format conversions (for example PNG input to DDS output) count as done.
-    Private Sub ProgressPollTimer_Tick(sender As Object, e As EventArgs) Handles ProgressPollTimer.Tick
+    Private Async Sub ProgressPollTimer_Tick(sender As Object, e As EventArgs) Handles ProgressPollTimer.Tick
+        If ProgressScanRunning Then
+            ProgressPollTimer.Interval = 1000
+            Return
+        End If
+        ProgressScanRunning = True
+        Dim InputPath As String = InputTextBox.Text
+        Dim OutputPath As String = OutputTextBox.Text
         Try
-            Dim DoneCount As Integer = 0
-            Dim TotalCount As Integer = 0
-            Dim Percent As Integer = GetOverallProgress(DoneCount, TotalCount)
-            If Percent < UpscaleProgress.Minimum Then Percent = UpscaleProgress.Minimum
-            If Percent > UpscaleProgress.Maximum Then Percent = UpscaleProgress.Maximum
-            UpscaleProgress.Value = Percent
-            QueueSummaryLabel.Text = DoneCount.ToString() & " / " & TotalCount.ToString() & " textures complete (" & Percent.ToString() & "%)"
+            Dim Snapshot As ProgressSnapshot = Await Task.Run(Function() ReadProgressSnapshot(InputPath, OutputPath))
+            If IsDisposed Then Return
+            If Not Snapshot.Failed Then
+                Dim Percent As Integer = Snapshot.Percent
+                If Percent < UpscaleProgress.Minimum Then Percent = UpscaleProgress.Minimum
+                If Percent > UpscaleProgress.Maximum Then Percent = UpscaleProgress.Maximum
+                UpscaleProgress.Value = Percent
+                QueueSummaryLabel.Text = Snapshot.DoneCount.ToString() & " / " & Snapshot.TotalCount.ToString() & " textures complete (" & Percent.ToString() & "%)"
+                UiToolTip.SetToolTip(QueueSummaryLabel, QueueSummaryLabel.Text)
 
-            If Not WorkHorse.IsBusy AndAlso RefreshSpandrelModelsButton.Enabled Then
-                If WatchDog.Enabled Then
-                    If TotalCount = 0 OrElse DoneCount >= TotalCount Then
-                        QueueActivityLabel.Text = "Watching for new textures…"
+                If Not WorkHorse.IsBusy AndAlso Not WatchScanRunning AndAlso Not QueueActivityLabel.Text.StartsWith("Failed") Then
+                    If WatchDog.Enabled Then
+                        If Snapshot.TotalCount = 0 OrElse Snapshot.DoneCount >= Snapshot.TotalCount Then
+                            QueueActivityLabel.Text = "Watching for new textures…"
+                        Else
+                            QueueActivityLabel.Text = "Watching · " & (Snapshot.TotalCount - Snapshot.DoneCount).ToString() & " remaining"
+                        End If
+                    ElseIf Snapshot.TotalCount = 0 Then
+                        QueueActivityLabel.Text = "Ready"
+                    ElseIf Snapshot.DoneCount >= Snapshot.TotalCount Then
+                        QueueActivityLabel.Text = "Complete"
                     Else
-                        QueueActivityLabel.Text = "Watching · " & (TotalCount - DoneCount).ToString() & " remaining"
+                        QueueActivityLabel.Text = "Paused · " & (Snapshot.TotalCount - Snapshot.DoneCount).ToString() & " remaining"
                     End If
-                ElseIf TotalCount = 0 Then
-                    QueueActivityLabel.Text = "Ready"
-                ElseIf DoneCount >= TotalCount Then
-                    QueueActivityLabel.Text = "Complete"
-                Else
-                    QueueActivityLabel.Text = "Paused · " & (TotalCount - DoneCount).ToString() & " remaining"
+                    UiToolTip.SetToolTip(QueueActivityLabel, QueueActivityLabel.Text)
                 End If
             End If
         Catch ex As Exception
             ' A removable or network-backed input/output folder can disappear during a scan.
+        Finally
+            ProgressScanRunning = False
         End Try
-        ProgressPollTimer.Interval = If(WorkHorse.IsBusy, 1000, 5000)
+        If Not IsDisposed Then ProgressPollTimer.Interval = If(WorkHorse.IsBusy, 1000, 5000)
     End Sub
 
-    Private Function GetOverallProgress(ByRef DoneCount As Integer, ByRef TotalCount As Integer) As Integer
+    Private Function ReadProgressSnapshot(InputPath As String, OutputPath As String) As ProgressSnapshot
+        Dim Snapshot As ProgressSnapshot
+        Dim DoneCount As Integer = 0
+        Dim TotalCount As Integer = 0
+        Try
+            If Not Directory.Exists(InputPath) OrElse Not Directory.Exists(OutputPath) Then
+                Snapshot.Failed = True
+                Snapshot.ErrorMessage = "Input or output folder is missing."
+                Return Snapshot
+            End If
+            Snapshot.Percent = GetOverallProgress(InputPath, OutputPath, DoneCount, TotalCount)
+            Snapshot.DoneCount = DoneCount
+            Snapshot.TotalCount = TotalCount
+        Catch ex As Exception
+            Snapshot.Failed = True
+            Snapshot.ErrorMessage = ex.GetBaseException().Message
+        End Try
+        Return Snapshot
+    End Function
+
+    Private Function ReadWatchSnapshot(InputPath As String, OutputPath As String) As ProgressSnapshot
+        Dim Snapshot As ProgressSnapshot
+        Try
+            If Not Directory.Exists(InputPath) Then
+                Snapshot.Failed = True
+                Snapshot.ErrorMessage = "Input folder is missing."
+                Return Snapshot
+            End If
+            Snapshot.SourceCount = Directory.GetFiles(InputPath, "*.*", SearchOption.AllDirectories).Length
+            Snapshot.MissingCount = GetMissingFiles(InputPath, OutputPath).Length
+        Catch ex As Exception
+            Snapshot.Failed = True
+            Snapshot.ErrorMessage = ex.GetBaseException().Message
+        End Try
+        Return Snapshot
+    End Function
+
+    Private Function GetOverallProgress(InputPath As String, OutputPath As String, ByRef DoneCount As Integer, ByRef TotalCount As Integer) As Integer
         DoneCount = 0
         TotalCount = 0
-        Dim InputPath As String = InputTextBox.Text
-        Dim OutputPath As String = OutputTextBox.Text
         If Not Directory.Exists(InputPath) OrElse Not Directory.Exists(OutputPath) Then Return 0
 
         Dim InputFiles As String() = Directory.GetFiles(InputPath, "*.*", SearchOption.AllDirectories)
@@ -1011,41 +1180,34 @@ Public Class Form1
         If ChainControl.ListItems.Count = 0 Then
             ChainList.Clear()
         End If
-        If e.Cancelled OrElse WatchDogButton.Text = "Stopping..." Then
+        If e.Error IsNot Nothing AndAlso Not e.Cancelled AndAlso Not StopRequested Then
             WatchDog.Stop()
-            WatchDog.Enabled = False
-            WatchDogButton.Text = "Running: False"
-            SwitchGroups(True)
-            WatchDogButton.Enabled = True
-            SkipList.Clear()
-            QueueActivityLabel.Text = "Cancelled"
-            Dim SingleRunPath As String = Path.Combine(Path.GetTempPath(), "Single_0")
-            If Directory.Exists(SingleRunPath) Then Directory.Delete(SingleRunPath, True)
-            Exit Sub
-        End If
-        If e.Error IsNot Nothing Then
-            WatchDog.Stop()
-            WatchDog.Enabled = False
-            WatchDogButton.Text = "Running: False"
-            WatchDogButton.Enabled = True
+            SetWatcherButtonIdle()
             SwitchGroups(True)
             SkipList.Clear()
             QueueActivityLabel.Text = "Failed — see error details"
             UiToolTip.SetToolTip(QueueActivityLabel, e.Error.GetBaseException().Message)
-            Dim SingleRunPath As String = Path.Combine(Path.GetTempPath(), "Single_0")
-            If Directory.Exists(SingleRunPath) Then Directory.Delete(SingleRunPath, True)
+            Dim FailedRunPath As String = Path.Combine(Path.GetTempPath(), "Single_0")
+            If Directory.Exists(FailedRunPath) Then Directory.Delete(FailedRunPath, True)
             MessageBox.Show("Upscaling failed: " & e.Error.GetBaseException().Message, "AutoCrispy error", MessageBoxButtons.OK, MessageBoxIcon.Error)
             Exit Sub
         End If
-        If WatchDogButton.Text = "Running: True" Then
+        If e.Cancelled OrElse StopRequested Then
+            WatchDog.Stop()
+            SetWatcherButtonIdle()
+            SwitchGroups(True)
+            SkipList.Clear()
+            QueueActivityLabel.Text = "Cancelled"
+            Dim CancelledRunPath As String = Path.Combine(Path.GetTempPath(), "Single_0")
+            If Directory.Exists(CancelledRunPath) Then Directory.Delete(CancelledRunPath, True)
+            Exit Sub
+        End If
+        If WatcherEnabled Then
             QueueActivityLabel.Text = "Watching for new textures…"
             WatchDog.Start()
         Else
             QueueActivityLabel.Text = "One-off run complete"
-            WatchDog.Stop()
-            WatchDog.Enabled = False
-            WatchDogButton.Text = "Running: False"
-            WatchDogButton.Enabled = True
+            SetWatcherButtonIdle()
             Dim SingleRunPath As String = Path.Combine(Path.GetTempPath(), "Single_0")
             If Directory.Exists(SingleRunPath) Then Directory.Delete(SingleRunPath, True)
             SwitchGroups(True)
@@ -1426,51 +1588,77 @@ Public Class Form1
         Return ""
     End Function
 
-    Private Sub AddModelToChain(Mode As String, Optional AddPreview As Boolean = True)
+    Private Function AddModelToChain(Mode As String, Optional AddPreview As Boolean = True) As Boolean
+        Dim Added As Boolean = False
         Select Case Mode
             Case "Waifu2x Caffe"
                 ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, "Caffe", ChainThumbs.Item(0)))
                 ChainList.Add(New FormSettings.ChainObject("Caffe", 0, CaffePath, "Waifu2x Caffe", Me))
+                Added = True
             Case "Waifu2x Vulkan"
                 ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, "Waifu Vulkan", ChainThumbs.Item(1)))
                 ChainList.Add(New FormSettings.ChainObject("Waifu Vulkan", 1, WaifuNcnnPath, "Waifu2x Vulkan", Me))
+                Added = True
             Case "RealSR Vulkan"
                 ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, "RealSR Vulkan", ChainThumbs.Item(2)))
                 ChainList.Add(New FormSettings.ChainObject("RealSR Vulkan", 2, RealSRNcnnPath, "RealSR Vulkan", Me))
+                Added = True
             Case "RealESRGAN Vulkan"
                 ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, "RealESRGAN Vulkan", ChainThumbs.Item(8)))
                 ChainList.Add(New FormSettings.ChainObject("RealESRGAN Vulkan", 8, RealESRGNcnnPath, "RealESRGAN Vulkan", Me))
+                Added = True
             Case "SRMD Vulkan"
                 ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, "SRMD Vulkan", ChainThumbs.Item(3)))
                 ChainList.Add(New FormSettings.ChainObject("SRMD Vulkan", 3, SRMDNcnnPath, "SRMD Vulkan", Me))
+                Added = True
             Case "Waifu2x CPP"
                 ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, "Waifu CPP", ChainThumbs.Item(4)))
                 ChainList.Add(New FormSettings.ChainObject("Waifu CPP", 4, WaifuCppPath, "Waifu2x CPP", Me))
+                Added = True
             Case "Anime4k CPP"
                 ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, "Anime4k", ChainThumbs.Item(5)))
                 ChainList.Add(New FormSettings.ChainObject("Anime4k", 5, Anime4kPath, "Anime4k CPP", Me))
+                Added = True
             Case "TexConv"
                 ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, "TexConv", ChainThumbs.Item(7)))
                 ChainList.Add(New FormSettings.ChainObject("TexConv", 7, TexConvPath, "TexConv", Me))
+                Added = True
             Case "xBRZ"
                 ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, "xBRZ", ChainThumbs.Item(0)))
                 ChainList.Add(New FormSettings.ChainObject("xBRZ", 0, xBRZPath, "xBRZ", Me))
+                Added = True
             Case "ESRGAN"
-                ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, "ESRGAN", ChainThumbs.Item(6)))
-                ChainList.Add(New FormSettings.ChainObject("ESRGAN", 6, PyPath, "ESRGAN", Me))
+                If PyModel.SelectedIndex < 0 OrElse PyModel.SelectedIndex >= PyModels.Count Then
+                    If AddPreview Then MessageBox.Show("Select an ESRGAN model before adding it to the chain.", "AutoCrispy", MessageBoxButtons.OK, MessageBoxIcon.Information)
+                Else
+                    ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, "ESRGAN", ChainThumbs.Item(6)))
+                    ChainList.Add(New FormSettings.ChainObject("ESRGAN", 6, PyPath, "ESRGAN", Me))
+                    Added = True
+                End If
             Case PLKSRBackendName
                 ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, "PLKSR 4x", ChainThumbs.Item(6)))
                 ChainList.Add(New FormSettings.ChainObject("PLKSR 4x", 6, "", "RealPLKSR", Me))
+                Added = True
             Case DAT2BackendName
                 ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, "PBRify V4 DAT2 4x", ChainThumbs.Item(6)))
                 ChainList.Add(New FormSettings.ChainObject("PBRify V4 DAT2 4x", 6, "", DAT2BackendName, Me))
+                Added = True
             Case SpandrelBackendName
-                Dim ModelDisplayName As String = "Spandrel - " & Path.GetFileName(GetSelectedUpscaleModel())
-                ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, ModelDisplayName, ChainThumbs.Item(6)))
-                ChainList.Add(New FormSettings.ChainObject(ModelDisplayName, 6, "", SpandrelBackendName, Me))
+                Dim ModelFile As String = GetSelectedUpscaleModel()
+                If ModelFile = "" Then
+                    If AddPreview Then MessageBox.Show("Select a Spandrel model before adding it to the chain.", "AutoCrispy", MessageBoxButtons.OK, MessageBoxIcon.Information)
+                Else
+                    Dim ModelDisplayName As String = "Spandrel - " & Path.GetFileName(ModelFile)
+                    ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, ModelDisplayName, ChainThumbs.Item(6)))
+                    ChainList.Add(New FormSettings.ChainObject(ModelDisplayName, 6, "", SpandrelBackendName, Me))
+                    Added = True
+                End If
         End Select
+        If Added Then ChainControl.SelectedIndex = ChainList.Count - 1
         ChainControl.DrawList(ChainControl.ListItems)
-    End Sub
+        UpdateChainCommandState()
+        Return Added
+    End Function
 
 #End Region
 
@@ -1814,14 +2002,157 @@ Public Class Form1
         Return UnlockedImage
     End Function
 
-    Private Function GetFolder() As String
+    Private Sub BrowseFolderInto(Target As TextBox, Description As String)
         Using FBD As New FolderBrowserDialog
-            If FBD.ShowDialog = DialogResult.OK Then
-                Return FBD.SelectedPath
-            End If
+            FBD.Description = Description
+            If Directory.Exists(Target.Text) Then FBD.SelectedPath = Target.Text
+            If FBD.ShowDialog() <> DialogResult.OK OrElse FBD.SelectedPath = "" Then Return
+            Target.Text = FBD.SelectedPath
         End Using
-        Return ""
-    End Function
+    End Sub
+
+    Private Structure ProgressSnapshot
+        Public Percent As Integer
+        Public DoneCount As Integer
+        Public TotalCount As Integer
+        Public SourceCount As Integer
+        Public MissingCount As Integer
+        Public Failed As Boolean
+        Public ErrorMessage As String
+    End Structure
+
+    Private Sub HideBackendGroups()
+        CaffeGroup.Visible = False
+        VulkanGroup.Visible = False
+        WaifuCPPGroup.Visible = False
+        AnimeCPPGroup.Visible = False
+        DDxGroup.Visible = False
+        xBRZGroup.Visible = False
+        PyGroup.Visible = False
+    End Sub
+
+    Private Sub ApplyStaticUiFixes()
+        UiToolTip.AutoPopDelay = 16000
+        UiToolTip.InitialDelay = 400
+        UiToolTip.ReshowDelay = 200
+        UiToolTip.ShowAlways = True
+
+        InputBrowse.AccessibleName = "Browse for input folder"
+        OutputBrowse.AccessibleName = "Browse for output folder"
+        ExeBrowse.AccessibleName = "Browse for backend folder"
+        InputBrowse.AccessibleDescription = "Choose the folder textures are dumped into."
+        OutputBrowse.AccessibleDescription = "Choose the folder upscaled textures should be written to."
+        ExeBrowse.AccessibleDescription = "Choose the folder that contains the upscale backends."
+        WatchDogButton.AccessibleDescription = "Starts or stops watching the input folder for new textures."
+        RunOnceButton.AccessibleDescription = "Upscale one image with the current settings."
+        UpscaleProgress.AccessibleName = "Upscale progress"
+        QueueSummaryLabel.AccessibleName = "Queue summary"
+        ChainRemove.AccessibleDescription = "Remove the selected chain step."
+        ChainRemove.Enabled = False
+        SpandrelModelInfoLabel.UseMnemonic = False
+        TileSizeHint.UseMnemonic = False
+        SpandrelScanStatusLabel.UseMnemonic = False
+
+        AlphaComboBox.Location = New Point(264, 86)
+        AlphaComboBox.Size = New Size(150, AlphaComboBox.Height)
+        Dim AlphaLabel As New Label With {
+            .AutoSize = True,
+            .Name = "AlphaModeLabel",
+            .Text = "Alpha:",
+            .Location = New Point(208, 90)
+        }
+        AdvSettingsGroup.Controls.Add(AlphaLabel)
+        Dim AlphaHelp As String = "Off processes every image. Skip Alpha ignores images with transparency. Alpha Only processes images that have transparency."
+        UiToolTip.SetToolTip(AlphaComboBox, AlphaHelp)
+        UiToolTip.SetToolTip(AlphaLabel, AlphaHelp)
+        UiToolTip.SetToolTip(HotKeyCheckbox, "After each batch, sends Alt+` to the active window. In Dolphin this toggles custom textures.")
+        UiToolTip.SetToolTip(CleanupCheckBox, "Deletes each input file after a successful upscale. This cannot be undone.")
+        UiToolTip.SetToolTip(DefringeCheck, "Removes halo artifacts from textures with transparency.")
+        UiToolTip.SetToolTip(DefringeThresh, "Alpha values below this threshold become fully transparent.")
+        UiToolTip.SetToolTip(VulkanNoise, "Denoise strength. -1 turns denoising off.")
+        UiToolTip.SetToolTip(SeamsBox, "Pads seamless textures before upscaling so the edges stay continuous.")
+        UiToolTip.SetToolTip(SeamScale, "Final upscale factor for the whole chain, as a product of each step.")
+        UiToolTip.SetToolTip(SeamMargin, "Padding kept around the texture. Do not set this wider than the source image.")
+        UiToolTip.SetToolTip(ExpertSettingsBox, "Extra arguments passed through to the selected backend.")
+        UiToolTip.SetToolTip(PortableCheckBox, "Save settings beside AutoCrispy instead of in AppData.")
+        UiToolTip.SetToolTip(ThreadComboBox, "Max starts up to 512 processes and can exhaust memory.")
+        UiToolTip.SetToolTip(PyTileSize, "Maximum inference tile size. 0 tries the whole image first.")
+        UiToolTip.SetToolTip(PyCPU, "Force CPU inference. This is much slower than a GPU.")
+        SetWrappedHint(TileSizeHint, TileSizeHint.Text)
+    End Sub
+
+    Private Sub PrepareChainViewport()
+        ChainScrollPanel = New Panel With {
+            .Name = "ChainScrollPanel",
+            .Location = ChainPreview.Location,
+            .Size = ChainPreview.Size,
+            .AutoScroll = True,
+            .BorderStyle = BorderStyle.FixedSingle,
+            .BackColor = SystemColors.Window,
+            .TabStop = False,
+            .AccessibleName = "Model chain"
+        }
+        ChainGroup.Controls.Add(ChainScrollPanel)
+        ChainScrollPanel.Controls.Add(ChainPreview)
+        ChainPreview.Location = Point.Empty
+        ChainPreview.Size = ChainScrollPanel.ClientSize
+        ChainPreview.Anchor = AnchorStyles.Top Or AnchorStyles.Left
+        ChainPreview.BackColor = SystemColors.Window
+        ChainPreview.TabStop = True
+        ChainPreview.AccessibleName = "Model chain"
+        ChainPreview.AccessibleDescription = "Drag to reorder. Arrow keys move the selection. Delete removes the selected step."
+    End Sub
+
+    Private Sub SetWrappedHint(Target As Label, Hint As String)
+        If Target Is Nothing Then Return
+        Target.Text = Hint
+        UiToolTip.SetToolTip(Target, Hint)
+    End Sub
+
+    Private Sub SetWatcherButtonIdle()
+        WatcherEnabled = False
+        StopRequested = False
+        WatchDog.Stop()
+        WatchDog.Enabled = False
+        WatchDogButton.Text = "Start Watching"
+        WatchDogButton.Enabled = True
+    End Sub
+
+    Private Sub SetWatcherButtonRunning()
+        WatcherEnabled = True
+        StopRequested = False
+        WatchDogButton.Text = "Stop Watching"
+        WatchDogButton.Enabled = True
+    End Sub
+
+    Private Sub SetWatcherButtonStopping()
+        WatcherEnabled = False
+        StopRequested = True
+        WatchDog.Stop()
+        WatchDog.Enabled = False
+        WatchDogButton.Text = "Stopping..."
+        WatchDogButton.Enabled = False
+    End Sub
+
+    Private Sub SyncChainListFromPreview(ByRef Accepted As Boolean)
+        Accepted = False
+        If ChainControl Is Nothing OrElse ChainControl.ListItems.Count <> ChainList.Count Then Return
+        Dim Reordered As New List(Of FormSettings.ChainObject)
+        Dim Seen As New HashSet(Of Integer)
+        For Each Item As DragDropList.DragDropItem In ChainControl.ListItems
+            If Item.Index < 0 OrElse Item.Index >= ChainList.Count OrElse Not Seen.Add(Item.Index) Then Return
+            Reordered.Add(ChainList(Item.Index))
+        Next
+        ChainList = Reordered
+        Accepted = True
+    End Sub
+
+    Private Sub UpdateChainCommandState()
+        Dim HasSelection As Boolean = ChainControl IsNot Nothing AndAlso ChainControl.SelectedIndex >= 0 AndAlso ChainControl.SelectedIndex < ChainList.Count
+        ChainRemove.Enabled = HasSelection
+        ChainContextEdit.Enabled = HasSelection
+        ChainContextDelete.Enabled = HasSelection
+    End Sub
 
     Private Function Quote(Source As String) As String
         Return ControlChars.Quote & Source & ControlChars.Quote

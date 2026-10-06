@@ -1,4 +1,4 @@
-﻿<Global.Microsoft.VisualBasic.CompilerServices.DesignerGenerated()>
+<Global.Microsoft.VisualBasic.CompilerServices.DesignerGenerated()>
 Partial Class Form1
     Inherits System.Windows.Forms.Form
 
@@ -192,6 +192,7 @@ Partial Class Form1
         Me.CaffeGroup.TabIndex = 11
         Me.CaffeGroup.TabStop = False
         Me.CaffeGroup.Text = "Caffe Settings"
+        Me.CaffeGroup.Visible = False
         '
         'CaffeTAA
         '
@@ -304,7 +305,7 @@ Partial Class Form1
         Me.WatchDogButton.Name = "WatchDogButton"
         Me.WatchDogButton.Size = New System.Drawing.Size(162, 35)
         Me.WatchDogButton.TabIndex = 10
-        Me.WatchDogButton.Text = "Running: False"
+        Me.WatchDogButton.Text = "Start Watching"
         Me.WatchDogButton.UseVisualStyleBackColor = True
         '
         'SettingsGroup
@@ -427,7 +428,7 @@ Partial Class Form1
         '
         Me.BackendStatusLabel.AutoEllipsis = True
         Me.BackendStatusLabel.ForeColor = System.Drawing.SystemColors.GrayText
-        Me.BackendStatusLabel.Location = New System.Drawing.Point(14, 59)
+        Me.BackendStatusLabel.Location = New System.Drawing.Point(14, 400)
         Me.BackendStatusLabel.Name = "BackendStatusLabel"
         Me.BackendStatusLabel.Size = New System.Drawing.Size(310, 16)
         Me.BackendStatusLabel.TabIndex = 15
@@ -502,6 +503,7 @@ Partial Class Form1
         Me.VulkanGroup.TabIndex = 11
         Me.VulkanGroup.TabStop = False
         Me.VulkanGroup.Text = "Vulkan Settings"
+        Me.VulkanGroup.Visible = False
         '
         'VulkanTAA
         '
@@ -599,6 +601,7 @@ Partial Class Form1
         Me.WaifuCPPGroup.TabIndex = 11
         Me.WaifuCPPGroup.TabStop = False
         Me.WaifuCPPGroup.Text = "Waifu2x CPP Settings"
+        Me.WaifuCPPGroup.Visible = False
         '
         'WaifuCppGPU
         '
@@ -729,6 +732,7 @@ Partial Class Form1
         Me.AnimeCPPGroup.TabIndex = 11
         Me.AnimeCPPGroup.TabStop = False
         Me.AnimeCPPGroup.Text = "Anime4k CPP Settings"
+        Me.AnimeCPPGroup.Visible = False
         '
         'AnimeCppPostFilter
         '
@@ -862,6 +866,7 @@ Partial Class Form1
         Me.PyGroup.TabIndex = 12
         Me.PyGroup.TabStop = False
         Me.PyGroup.Text = "ESRGAN"
+        Me.PyGroup.Visible = False
         '
         'PyCPU
         '
@@ -916,7 +921,7 @@ Partial Class Form1
         '
         'TileSizeHint
         '
-        Me.TileSizeHint.AutoEllipsis = True
+        Me.TileSizeHint.AutoEllipsis = False
         Me.TileSizeHint.ForeColor = System.Drawing.SystemColors.GrayText
         Me.TileSizeHint.Location = New System.Drawing.Point(9, 177)
         Me.TileSizeHint.Margin = New System.Windows.Forms.Padding(4, 0, 4, 0)
@@ -927,7 +932,7 @@ Partial Class Form1
         '
         'SpandrelModelInfoLabel
         '
-        Me.SpandrelModelInfoLabel.AutoEllipsis = True
+        Me.SpandrelModelInfoLabel.AutoEllipsis = False
         Me.SpandrelModelInfoLabel.Location = New System.Drawing.Point(9, 69)
         Me.SpandrelModelInfoLabel.Name = "SpandrelModelInfoLabel"
         Me.SpandrelModelInfoLabel.Size = New System.Drawing.Size(570, 34)
@@ -1189,7 +1194,7 @@ Partial Class Form1
         Me.HotKeyCheckbox.Name = "HotKeyCheckbox"
         Me.HotKeyCheckbox.Size = New System.Drawing.Size(127, 24)
         Me.HotKeyCheckbox.TabIndex = 17
-        Me.HotKeyCheckbox.Text = "Send Hotkey"
+        Me.HotKeyCheckbox.Text = "Send Alt+`"
         Me.HotKeyCheckbox.UseVisualStyleBackColor = True
         '
         'SeamMargin
@@ -1318,6 +1323,7 @@ Partial Class Form1
         Me.DDxGroup.TabIndex = 16
         Me.DDxGroup.TabStop = False
         Me.DDxGroup.Text = "TexConv Settings"
+        Me.DDxGroup.Visible = False
         '
         'Label29
         '
@@ -1434,7 +1440,7 @@ Partial Class Form1
         Me.SepAlphaCheckBox.Name = "SepAlphaCheckBox"
         Me.SepAlphaCheckBox.Size = New System.Drawing.Size(146, 24)
         Me.SepAlphaCheckBox.TabIndex = 2
-        Me.SepAlphaCheckBox.Text = "Seperate Alpha"
+        Me.SepAlphaCheckBox.Text = "Separate Alpha"
         Me.SepAlphaCheckBox.UseVisualStyleBackColor = True
         '
         'Label19
@@ -1468,6 +1474,7 @@ Partial Class Form1
         Me.xBRZGroup.TabIndex = 17
         Me.xBRZGroup.TabStop = False
         Me.xBRZGroup.Text = "xBRZ"
+        Me.xBRZGroup.Visible = False
         '
         'Label30
         '
@@ -1493,6 +1500,7 @@ Partial Class Form1
         '
         'AlphaComboBox
         '
+        Me.AlphaComboBox.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList
         Me.AlphaComboBox.FormattingEnabled = True
         Me.AlphaComboBox.Items.AddRange(New Object() {"Off", "Skip Alpha", "Alpha Only"})
         Me.AlphaComboBox.Location = New System.Drawing.Point(208, 86)

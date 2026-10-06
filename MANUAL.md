@@ -19,7 +19,7 @@ The Spandrel model runner is separate from the legacy ESRGAN Python bundle. It n
 
 AutoCripsy supports chaining models together.  This is agnostic of process and platform; you can chain any of the backends together, with any other backend, and with any script and/or model from ESRGAN.
 
-To add a model to the chain, first set the settings you'd like to add to the chain in the UI.  Then, under "Chaining", click the "Add" button.  This "snapshots" your settings, and adds them to the chain.  Chain objects can be re-arranged, by clicking and draging them.  Be aware that only ~5 models should be added to the chain (after this, you will encounter strange/unexpected behaviour.  You can make longer chains, using a text editor on an existing saved chain, and they will work, however the UI will misbehave if you try to edit it).
+To add a model to the chain, first set the settings you'd like to add to the chain in the UI.  Then, under "Chaining", click the "Add" button.  This "snapshots" your settings, and adds them to the chain.  Chain objects can be re-arranged by dragging them.  Select a step and press Delete, or use the Delete button, to remove it.  Longer chains scroll instead of shrinking the thumbnails away.  Names that do not fit are trimmed; the full name is still stored in the chain.
 
 In addition to adding, re-arranging, and removing, you can also Edit and Rename models in the chain.  This is done through the Right Click -> Edit menu.  This will bring up an XML representation of the chain object, letting you edit its Name, Icon, and internal settings.
 

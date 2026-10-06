@@ -1,4 +1,4 @@
-﻿<Serializable()> Public Class FormSettings
+<Serializable()> Public Class FormSettings
 
     Public Shared Sub LoadSettings(Source As Form1, LoadedSettings As Settings)
         'Load Caffe Settings
@@ -77,8 +77,14 @@
 
         'Load Internal Settings
         Source.ChainList = LoadedSettings.Chain
-        For Each ChainItem As ChainObject In Source.ChainList
-            Source.ChainControl.ListItems.Add(New DragDropList.DragDropItem(Source.ChainList.IndexOf(ChainItem), ChainItem.Name, Source.ChainThumbs.Item(ChainItem.IconIndex)))
+        If Source.ChainList Is Nothing Then Source.ChainList = New List(Of ChainObject)
+        For ChainIndex As Integer = 0 To Source.ChainList.Count - 1
+            Dim ChainItem As ChainObject = Source.ChainList(ChainIndex)
+            If ChainItem.IconIndex < 0 OrElse ChainItem.IconIndex >= Source.ChainThumbs.Count Then
+                ChainItem.IconIndex = 0
+                Source.ChainList(ChainIndex) = ChainItem
+            End If
+            Source.ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainIndex, ChainItem.Name, Source.ChainThumbs.Item(ChainItem.IconIndex)))
         Next
     End Sub
 
