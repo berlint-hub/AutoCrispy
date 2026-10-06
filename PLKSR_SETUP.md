@@ -1,21 +1,24 @@
-# RealPLKSR / 4x-PBRify setup
+# PLKSR / 4x-PBRify setup
 
-AutoCrispy can run **only the 4x-PBRify_RPLKSRd_V3 upscaler checkpoint** as a live folder-watching backend. It does not need the complete PBRify material-generation workflow or the chaiNNer GUI. The inference bridge uses [Spandrel](https://github.com/chaiNNer-org/spandrel), the PyTorch model loader used by chaiNNer.
+AutoCrispy adds a **PLKSR** backend for the single `4x-PBRify_RPLKSRd_V3` 4× texture-upscaling checkpoint. It does not run the full PBRify material workflow or need the chaiNNer GUI. The checkpoint is a RealPLKSR-DySample model, loaded by the bundled AutoCrispy helper through [Spandrel](https://github.com/chaiNNer-org/spandrel).
 
-## 1. Get the checkpoint
+## 1. Prepare the PLKSR folder and checkpoint
 
-Download `4x-PBRify_RPLKSRd_V3.pth` from the [model release](https://github.com/Kim2091/Kim2091-Models/releases/tag/4x-PBRify_RPLKSRd_V3). Do not add the checkpoint to the AutoCrispy Git repository.
-
-Put the file in the AutoCrispy program folder or the configured backend search root, or in a folder up to two levels below either location. For example:
+If you want the same folder layout as your ESRGAN backend, download the [PLKSR source ZIP](https://github.com/dslisleedh/PLKSR) and extract/rename its folder to `PLKSR` beside `ESRGAN`:
 
 ```text
-AutoCrispy.exe
-spandrel_upscale.py
-Models/
-  4x-PBRify_RPLKSRd_V3.pth
+Backend/
+  ESRGAN/
+    esrgan.exe
+    models/...
+  PLKSR/
+    (the extracted PLKSR source files)
+    4x-PBRify_RPLKSRd_V3.pth
 ```
 
-The file name must remain `4x-PBRify_RPLKSRd_V3.pth`. AutoCrispy will show **RealPLKSR (Spandrel)** in the backend list when it finds the checkpoint.
+The source ZIP is optional: AutoCrispy does not execute that repository, and it does not contain the PBRify checkpoint or a ready-to-run `plksr.exe`. Download the exact checkpoint separately from the [model release](https://github.com/Kim2091/Kim2091-Models/releases/tag/4x-PBRify_RPLKSRd_V3) and put it directly in `PLKSR` or its `pretrained_models` subfolder. AutoCrispy searches the configured backend folder and the program folder for this exact filename, including nested folders. Do not add the checkpoint to the Git repository.
+
+When found, **PLKSR** appears in AutoCrispy's backend list, and the model selector shows the fixed `4x-PBRify_RPLKSRd_V3.pth` checkpoint.
 
 ## 2. Install the inference runtime
 
@@ -31,8 +34,8 @@ Spandrel 0.4.2 includes PLKSR and RealPLKSR DySample checkpoint detection. If CU
 
 ## 3. Use it in AutoCrispy
 
-1. Start AutoCrispy. When the checkpoint is found, **RealPLKSR (Spandrel)** is preselected as the live upscaler.
-2. An existing chain entry that uses the exact legacy model `4x_gameai_2.0` is upgraded to **RealPLKSR 4x** automatically. Other ESRGAN chains are left alone. If your chain is empty or still uses another model, add **RealPLKSR 4x** from the chain tab and remove the old upscaler if appropriate. The checkpoint is fixed to the PBRify model; the model drop-down is intentionally not a general model picker.
+1. Start AutoCrispy. When the checkpoint is found, **PLKSR** is preselected as the live backend; its model selector shows the PBRify checkpoint.
+2. A saved chain entry using the exact legacy model `4x_gameai_2.0` is upgraded to **PLKSR 4x** automatically. Other ESRGAN chains are left alone. If your chain is empty or still uses another model, add **PLKSR 4x** from the chain tab and remove the old upscaler if appropriate. The model is intentionally fixed to this one checkpoint.
 3. Start the watcher as usual. The runner loads the checkpoint once per batch, then processes the new textures.
 
 The existing tile-size setting controls the maximum inference tile size. Start at `512`; increase it for fewer tiles/faster processing if there is enough GPU memory, or lower it if inference runs out of memory. CUDA out-of-memory errors trigger smaller-tile retries automatically. The CPU checkbox forces CPU inference.

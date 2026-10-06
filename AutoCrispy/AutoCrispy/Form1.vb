@@ -30,7 +30,7 @@ Public Class Form1
     Public Property PyModels As New List(Of String)
     Public Property PLKSRModelPath As String
 
-    Private Const SpandrelBackendName As String = "RealPLKSR (Spandrel)"
+    Private Const PLKSRBackendName As String = "PLKSR"
     Private Const PLKSRCheckpointName As String = "4x-PBRify_RPLKSRd_V3.pth"
     Private Const SpandrelRunnerName As String = "spandrel_upscale.py"
 
@@ -84,7 +84,7 @@ Public Class Form1
         End If
         StartUpCheckEXE()
         If ExeComboBox.Items.Count > 0 Then
-            Dim PreferredBackendIndex As Integer = ExeComboBox.Items.IndexOf(SpandrelBackendName)
+            Dim PreferredBackendIndex As Integer = ExeComboBox.Items.IndexOf(PLKSRBackendName)
             If PreferredBackendIndex >= 0 Then
                 ExeComboBox.SelectedIndex = PreferredBackendIndex
                 ReplaceLegacyUpscalerChain()
@@ -118,7 +118,7 @@ Public Class Form1
         If Not Directory.Exists(Root) Then
             PLKSRModelPath = FindPLKSRModel(Application.StartupPath)
             If PLKSRModelPath <> "" AndAlso File.Exists(Path.Combine(Application.StartupPath, SpandrelRunnerName)) Then
-                ExeComboBox.Items.Add(SpandrelBackendName)
+                ExeComboBox.Items.Add(PLKSRBackendName)
             End If
             Exit Sub
         End If
@@ -154,7 +154,7 @@ Public Class Form1
             PLKSRModelPath = FindPLKSRModel(Application.StartupPath)
         End If
         If PLKSRModelPath <> "" AndAlso File.Exists(Path.Combine(Application.StartupPath, SpandrelRunnerName)) Then
-            ExeComboBox.Items.Add(SpandrelBackendName)
+            ExeComboBox.Items.Add(PLKSRBackendName)
         End If
 
         If ExeComboBox.Items.Contains("ESRGAN") AndAlso PyModels.Count = 0 AndAlso PLKSRModelPath = "" Then
@@ -194,7 +194,7 @@ Public Class Form1
                 Dim PythonSettings As FormSettings.PythonPackage = CType(ChainItem.Package, FormSettings.PythonPackage)
                 If String.Equals(Path.GetFileNameWithoutExtension(PythonSettings.Model), "4x_gameai_2.0", StringComparison.OrdinalIgnoreCase) Then
                     PythonSettings = New FormSettings.PythonPackage(PLKSRModelPath, PythonSettings.TileSize, PythonSettings.CPUOnly, True)
-                    ChainItem.Name = "RealPLKSR 4x"
+                    ChainItem.Name = "PLKSR 4x"
                     ChainItem.FileLocation = ""
                     ChainItem.Package = PythonSettings
                     ChainItem.PackageType = "RealPLKSR"
@@ -260,7 +260,7 @@ Public Class Form1
         End If
         StartUpCheckEXE()
         If ExeComboBox.Items.Count > 0 Then
-            Dim PreferredBackendIndex As Integer = ExeComboBox.Items.IndexOf(SpandrelBackendName)
+            Dim PreferredBackendIndex As Integer = ExeComboBox.Items.IndexOf(PLKSRBackendName)
             If PreferredBackendIndex >= 0 Then
                 ExeComboBox.SelectedIndex = PreferredBackendIndex
                 ReplaceLegacyUpscalerChain()
@@ -292,7 +292,7 @@ Public Class Form1
                 For Each ChainItem As FormSettings.ChainObject In ChainList
                     ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.IndexOf(ChainItem), ChainItem.Name, ChainThumbs.Item(ChainItem.IconIndex)))
                 Next
-                If ExeComboBox.Items.Contains(SpandrelBackendName) Then ReplaceLegacyUpscalerChain()
+                If ExeComboBox.Items.Contains(PLKSRBackendName) Then ReplaceLegacyUpscalerChain()
                 ChainControl.DrawList(ChainControl.ListItems)
             End If
         End Using
@@ -451,9 +451,9 @@ Public Class Form1
                 ConfigurePythonModelSelector(False)
                 PyGroup.Text = "ESRGAN"
                 MoveShowGroup(PyGroup)
-            Case SpandrelBackendName
+            Case PLKSRBackendName
                 ConfigurePythonModelSelector(True)
-                PyGroup.Text = "RealPLKSR (Spandrel)"
+                PyGroup.Text = "PLKSR"
                 MoveShowGroup(PyGroup)
         End Select
     End Sub
@@ -478,7 +478,7 @@ Public Class Form1
     End Sub
 
     Public Function GetSelectedUpscaleModel() As String
-        If If(ExeComboBox.SelectedItem, "").ToString() = SpandrelBackendName Then
+        If If(ExeComboBox.SelectedItem, "").ToString() = PLKSRBackendName Then
             Return PLKSRModelPath
         End If
         If PyModel.SelectedIndex >= 0 AndAlso PyModel.SelectedIndex < PyModels.Count Then
@@ -839,9 +839,9 @@ Public Class Form1
             Case "ESRGAN"
                 ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, "ESRGAN", ChainThumbs.Item(6)))
                 ChainList.Add(New FormSettings.ChainObject("ESRGAN", 6, PyPath, "ESRGAN", Me))
-            Case SpandrelBackendName
-                ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, "RealPLKSR 4x", ChainThumbs.Item(6)))
-                ChainList.Add(New FormSettings.ChainObject("RealPLKSR 4x", 6, "", "RealPLKSR", Me))
+            Case PLKSRBackendName
+                ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, "PLKSR 4x", ChainThumbs.Item(6)))
+                ChainList.Add(New FormSettings.ChainObject("PLKSR 4x", 6, "", "RealPLKSR", Me))
         End Select
         ChainControl.DrawList(ChainControl.ListItems)
     End Sub

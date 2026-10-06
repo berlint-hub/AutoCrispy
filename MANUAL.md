@@ -5,7 +5,7 @@ AutoCrispy has some features.  I'll explain them here.
 
 AutoCrispy will try to detect any Executables it supports on startup.  They can be in the folder with AutoCrispy, or in their own subfolders.  Note that, AutoCrispy only searches one folder deep (that is to say, it doesn't check any folders inside of folders for the Executables).
 
-Autocrispy also searches in these subfolders for Python Scrips and ESRGAN Models.  For ESRGAN Models, AutoCrispy searches down one level further (So, two directorys down).  The intent, is to have a folder for ESRGAN, with the scripts inside it, and a folder with your models inside that (and, if you have the portable build provided, that in the folder with the scripts as well.)  The RealPLKSR backend searches for the exact `4x-PBRify_RPLKSRd_V3.pth` checkpoint in the program/search root and up to two folders below it.
+Autocrispy also searches in these subfolders for Python Scrips and ESRGAN Models.  For ESRGAN Models, AutoCrispy searches down one level further (So, two directorys down).  The intent, is to have a folder for ESRGAN, with the scripts inside it, and a folder with your models inside that (and, if you have the portable build provided, that in the folder with the scripts as well.)  The PLKSR backend searches the program/configured backend roots for the exact `4x-PBRify_RPLKSRd_V3.pth` checkpoint, including nested folders.
 
 ## Special Notes about Python
 
