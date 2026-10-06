@@ -107,7 +107,7 @@ class SpandrelRunnerTests(unittest.TestCase):
             models: dict[str, object] = {
                 "valid.pth": FakeImageDescriptor(),
                 "1x-DXTDecompressor-Source-V3.pth": FakeImageDescriptor(
-                    scale=1, architecture="ESRGAN"
+                    purpose="Restoration", scale=1, architecture="ESRGAN"
                 ),
                 "wrong-scale.pt": FakeImageDescriptor(scale=2),
                 "wrong-channels.ckpt": FakeImageDescriptor(output_channels=1),
@@ -172,7 +172,9 @@ class SpandrelRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             checkpoint = Path(temporary) / "1x-DXTDecompressor-Source-V3.pth"
             checkpoint.touch()
-            descriptor = FakeImageDescriptor(scale=1, architecture="ESRGAN")
+            descriptor = FakeImageDescriptor(
+                purpose="Restoration", scale=1, architecture="ESRGAN"
+            )
             torch, spandrel = self.make_fake_modules({checkpoint.name: descriptor})
             with patch.dict(sys.modules, {"torch": torch, "spandrel": spandrel}):
                 loaded, _, _, _ = runner._load_model(
@@ -188,7 +190,9 @@ class SpandrelRunnerTests(unittest.TestCase):
                 {checkpoint.name: FakeImageDescriptor(scale=2)}
             )
             with patch.dict(sys.modules, {"torch": torch, "spandrel": spandrel}):
-                with self.assertRaisesRegex(ValueError, "1x or 4x RGB super-resolution"):
+                with self.assertRaisesRegex(
+                    ValueError, "1x RGB restoration or 4x RGB super-resolution"
+                ):
                     runner._load_model(checkpoint, force_cpu=True, generic_model=True)
 
     def test_list_models_cli_does_not_require_inference_arguments(self) -> None:

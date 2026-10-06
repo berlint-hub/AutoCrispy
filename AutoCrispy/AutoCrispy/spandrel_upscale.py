@@ -38,14 +38,21 @@ TILE_OVERLAP = 32
 MODEL_FILE_EXTENSIONS = {".pth", ".pt", ".ckpt", ".safetensors"}
 
 
+def _has_supported_generic_purpose(descriptor: Any) -> bool:
+    # Spandrel labels 1x ESRGAN/restoration checkpoints as "Restoration".
+    return descriptor.purpose == "SR" or (
+        descriptor.scale == 1 and descriptor.purpose == "Restoration"
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Process a folder with Spandrel-supported 1x or 4x RGB models."
+        description="Process a folder with 1x RGB restoration or 4x RGB super-resolution models."
     )
     parser.add_argument(
         "--list-models",
         type=Path,
-        help="List supported 1x or 4x RGB super-resolution checkpoints in a folder and exit",
+        help="List 1x RGB restoration or 4x RGB super-resolution checkpoints and exit",
     )
     parser.add_argument(
         "model", type=Path, nargs="?", help="PyTorch checkpoint to run"
@@ -64,7 +71,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--generic-model",
         action="store_true",
-        help="Allow any Spandrel-recognized 1x or 4x RGB super-resolution checkpoint",
+        help="Allow any Spandrel-recognized 1x RGB restoration or 4x RGB super-resolution checkpoint",
     )
     parser.add_argument(
         "--debug", action="store_true", help="Print a full traceback on errors"
@@ -105,8 +112,13 @@ def _load_model(
     architecture = str(descriptor.architecture.id)
     tags = {str(tag).casefold() for tag in descriptor.tags}
     allowed_scales = SUPPORTED_GENERIC_SCALES if generic_model else {MODEL_SCALE}
+    purpose_valid = (
+        _has_supported_generic_purpose(descriptor)
+        if generic_model
+        else descriptor.purpose == "SR"
+    )
     common_valid = (
-        descriptor.purpose == "SR"
+        purpose_valid
         and descriptor.scale in allowed_scales
         and descriptor.input_channels == 3
         and descriptor.output_channels == 3
@@ -123,7 +135,7 @@ def _load_model(
 
     if not common_valid or not model_valid:
         if generic_model:
-            expected_description = "a Spandrel-supported 1x or 4x RGB super-resolution"
+            expected_description = "a Spandrel-supported 1x RGB restoration or 4x RGB super-resolution"
         elif display_name == "RealPLKSR-DySample":
             expected_description = "a 4x RealPLKSR-DySample RGB"
         else:
@@ -347,7 +359,7 @@ def list_supported_models(model_root: Path, debug: bool = False) -> int:
             descriptor = loader.load_from_file(checkpoint)
             supported = (
                 isinstance(descriptor, ImageModelDescriptor)
-                and descriptor.purpose == "SR"
+                and _has_supported_generic_purpose(descriptor)
                 and descriptor.scale in SUPPORTED_GENERIC_SCALES
                 and descriptor.input_channels == 3
                 and descriptor.output_channels == 3
