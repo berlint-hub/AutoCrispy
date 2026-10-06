@@ -5,7 +5,7 @@ AutoCrispy has some features.  I'll explain them here.
 
 AutoCrispy will try to detect any Executables it supports on startup.  They can be in the folder with AutoCrispy, or in their own subfolders.  Note that, AutoCrispy only searches one folder deep (that is to say, it doesn't check any folders inside of folders for the Executables).
 
-AutoCrispy also searches in these subfolders for Python scripts and ESRGAN models. For ESRGAN models, it searches two directory levels down. The fixed Spandrel backends search the program/configured backend roots for the exact PLKSR V3 and DAT2 V4 checkpoint names, including nested folders. Generic Spandrel checkpoints go in a `Spandrel` folder beneath one of those roots; only Spandrel-recognized 4× RGB super-resolution checkpoints are listed. This selector is separate from the legacy ESRGAN backend. See [PLKSR_SETUP.md](PLKSR_SETUP.md) for folder and Python/PyTorch setup.
+AutoCrispy also searches in these subfolders for Python scripts and ESRGAN models. For ESRGAN models, it searches two directory levels down. The fixed Spandrel backends search the program/configured backend roots for the exact PLKSR V3 and DAT2 V4 checkpoint names, including nested folders. Put all Spandrel checkpoints in a shared `models` folder under one of those roots; the generic selector lists only Spandrel-recognized 4× RGB super-resolution checkpoints. Older `Spandrel` folders remain supported. This selector is separate from the legacy ESRGAN backend. See [PLKSR_SETUP.md](PLKSR_SETUP.md) for folder and Python/PyTorch setup.
 
 ## Special Notes about Python
 

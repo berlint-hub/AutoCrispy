@@ -8,19 +8,15 @@ AutoCrispy can run the fixed PBRify 4× models and compatible checkpoints recogn
 
 ## 1. Install checkpoints
 
-Place checkpoints in the configured backend folder, beside AutoCrispy, or beneath the program folder. The fixed PLKSR and DAT2 backends are detected by their exact `.pth` filenames. Example layout:
+Use one shared **`models`** folder for the checkpoints, either under the configured backend folder or beside AutoCrispy. The fixed PLKSR and DAT2 backends are recognized by their exact `.pth` filenames even in this shared folder. Example:
 
 ```text
 Backend/
-  PLKSR/
+  models/
     4x-PBRify_RPLKSRd_V3.pth
-  DAT2/
     4x-PBRify_UpscalerV4.pth
-  Spandrel/
-    my-4x-model.safetensors
-    another-model.pth
-    collection/
-      model.ckpt
+    gameai-2.0.pth
+    another-model.safetensors
 ```
 
 Download the fixed checkpoints from their releases:
@@ -30,7 +26,9 @@ Download the fixed checkpoints from their releases:
 
 The optional [PLKSR source ZIP](https://github.com/dslisleedh/PLKSR) is not executed by AutoCrispy. Use the `.pth` asset from the V4 release. The PLKSR and DAT2 checkpoints are independent; install either or both.
 
-For generic checkpoints, use a folder named **`Spandrel`** directly under the configured backend folder (or directly under AutoCrispy's program folder). The selector checks `.pth`, `.pt`, `.ckpt`, and `.safetensors` files in that folder and up to three nested folders. Each candidate is loaded through Spandrel; only image super-resolution models with scale 4 and three input and output channels appear in the selector. Unsupported, corrupt, non-SR, non-4×, or non-RGB checkpoints are skipped. The legacy **ESRGAN** selector remains separate and unchanged.
+The generic **Spandrel** selector uses the same `models` folder. It checks `.pth`, `.pt`, `.ckpt`, and `.safetensors` files there and up to three nested folders. Each candidate is loaded through Spandrel; only image super-resolution models with scale 4 and three input and output channels appear in the selector. Unsupported, corrupt, non-SR, non-4×, or non-RGB checkpoints are skipped. Older `Spandrel` folders are still searched for compatibility. The legacy **ESRGAN** selector remains separate and unchanged.
+
+For example, [4× GameAI 2.0](https://openmodeldb.info/models/4x-GameAI-2-0) is listed as a 4× RGB ESRGAN PyTorch checkpoint, and Spandrel supports regular ESRGAN/RRDBNet models. Put its `.pth` file in `models`; if the installed Spandrel version recognizes the checkpoint, it will appear in the generic selector.
 
 ## 2. Install the inference runtime
 
@@ -46,7 +44,7 @@ Spandrel 0.4.2 detects RealPLKSR-DySample, DAT architectures, and other supporte
 
 ## 3. Use a Spandrel model
 
-1. Start AutoCrispy. The exact PLKSR and DAT2 checkpoints appear as separate backends when installed. The generic **Spandrel** backend appears when at least one eligible checkpoint is found in the `Spandrel` folder.
+1. Start AutoCrispy. The exact PLKSR and DAT2 checkpoints appear as separate backends when installed. The generic **Spandrel** backend appears when at least one eligible checkpoint is found in `models` (or the legacy `Spandrel` folder).
 2. If PLKSR and DAT2 are both installed, PLKSR remains the default; DAT2 is preferred over generic Spandrel when PLKSR is absent. If only generic Spandrel models are found, that backend is selected. Choose a model from its selector, then add it from the chain tab if needed.
 3. Start the watcher as usual. The helper loads the selected checkpoint once per batch, then processes new textures.
 

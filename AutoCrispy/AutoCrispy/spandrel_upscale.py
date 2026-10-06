@@ -1,8 +1,8 @@
 """Folder-based Spandrel inference bridge for AutoCrispy.
 
-Loads the supported PBRify RealPLKSR-DySample and DAT2 checkpoints through
-Spandrel, then upscales the supported files in one input directory. The model
-is kept resident for the whole batch.
+Loads the fixed PBRify PLKSR/DAT2 models or a Spandrel-recognized generic
+checkpoint, then upscales supported files in one input directory. The selected
+model is kept resident for the whole batch.
 """
 
 from __future__ import annotations

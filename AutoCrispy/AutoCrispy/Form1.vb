@@ -39,6 +39,8 @@ Public Class Form1
     Private Const DAT2BackendName As String = "DAT2"
     Private Const DAT2CheckpointName As String = "4x-PBRify_UpscalerV4.pth"
     Private Const SpandrelBackendName As String = "Spandrel"
+    Private Const GenericModelFolderName As String = "models"
+    Private Const LegacySpandrelModelFolderName As String = "Spandrel"
     Private Const SpandrelRunnerName As String = "spandrel_upscale.py"
     Private SpandrelScanGeneration As Integer = 0
     Private SpandrelScanCancellation As CancellationTokenSource
@@ -196,12 +198,28 @@ Public Class Form1
         End If
     End Sub
 
-    Private Function FindGenericSpandrelModelFolder(SearchRoot As String) As String
-        If Not Directory.Exists(SearchRoot) Then Return ""
-        If Path.GetFileName(SearchRoot).Equals(SpandrelBackendName, StringComparison.OrdinalIgnoreCase) Then Return SearchRoot
-        Dim ModelFolder As String = Path.Combine(SearchRoot, SpandrelBackendName)
-        If Directory.Exists(ModelFolder) Then Return ModelFolder
-        Return ""
+    Private Function FindGenericSpandrelModelFolders(SearchRoot As String) As List(Of String)
+        Dim Result As New List(Of String)
+        If Not Directory.Exists(SearchRoot) Then Return Result
+
+        Dim NormalizedSearchRoot As String = SearchRoot
+        If Not String.Equals(SearchRoot, Path.GetPathRoot(SearchRoot), StringComparison.OrdinalIgnoreCase) Then
+            NormalizedSearchRoot = SearchRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+        End If
+        Dim RootFolderName As String = Path.GetFileName(NormalizedSearchRoot)
+        If RootFolderName.Equals(GenericModelFolderName, StringComparison.OrdinalIgnoreCase) OrElse
+            RootFolderName.Equals(LegacySpandrelModelFolderName, StringComparison.OrdinalIgnoreCase) Then
+            Result.Add(NormalizedSearchRoot)
+            Return Result
+        End If
+
+        For Each FolderName As String In New String() {GenericModelFolderName, LegacySpandrelModelFolderName}
+            Dim ModelFolder As String = Path.Combine(NormalizedSearchRoot, FolderName)
+            If Directory.Exists(ModelFolder) AndAlso Not Result.Contains(ModelFolder, StringComparer.OrdinalIgnoreCase) Then
+                Result.Add(ModelFolder)
+            End If
+        Next
+        Return Result
     End Function
 
     Private Async Function RefreshSupportedSpandrelModels(SearchRoot As String) As Task
@@ -220,13 +238,13 @@ Public Class Form1
         SupportedSpandrelModels.Clear()
 
         Dim ModelFolders As New List(Of String)
-        Dim ModelFolder As String = FindGenericSpandrelModelFolder(SearchRoot)
-        If ModelFolder <> "" Then ModelFolders.Add(ModelFolder)
+        For Each ModelFolder As String In FindGenericSpandrelModelFolders(SearchRoot)
+            If Not ModelFolders.Contains(ModelFolder, StringComparer.OrdinalIgnoreCase) Then ModelFolders.Add(ModelFolder)
+        Next
         If Not String.Equals(SearchRoot, Application.StartupPath, StringComparison.OrdinalIgnoreCase) Then
-            ModelFolder = FindGenericSpandrelModelFolder(Application.StartupPath)
-            If ModelFolder <> "" AndAlso Not ModelFolders.Contains(ModelFolder, StringComparer.OrdinalIgnoreCase) Then
-                ModelFolders.Add(ModelFolder)
-            End If
+            For Each ModelFolder As String In FindGenericSpandrelModelFolders(Application.StartupPath)
+                If Not ModelFolders.Contains(ModelFolder, StringComparer.OrdinalIgnoreCase) Then ModelFolders.Add(ModelFolder)
+            Next
         End If
 
         Dim PythonExecutable As String = FindPythonExecutable()
@@ -273,12 +291,16 @@ Public Class Form1
     End Function
 
     Private Function ScanSpandrelModelFolders(ModelFolders As List(Of String), PythonExecutable As String, RunnerPath As String, DebugEnabled As Boolean, ScanToken As CancellationToken) As List(Of String)
+        Dim Result As New List(Of String)
+        Dim SeenModels As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
         For Each ModelFolder As String In ModelFolders
             ScanToken.ThrowIfCancellationRequested()
             Dim Models As List(Of String) = ScanSpandrelModelFolder(ModelFolder, PythonExecutable, RunnerPath, DebugEnabled, ScanToken)
-            If Models.Count > 0 Then Return Models
+            For Each ModelPath As String In Models
+                If SeenModels.Add(ModelPath) Then Result.Add(ModelPath)
+            Next
         Next
-        Return New List(Of String)
+        Return Result
     End Function
 
     Private Function ScanSpandrelModelFolder(ModelFolder As String, PythonExecutable As String, RunnerPath As String, DebugEnabled As Boolean, ScanToken As CancellationToken) As List(Of String)
