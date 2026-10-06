@@ -802,17 +802,17 @@ Public Class Form1
             Case PLKSRBackendName
                 ConfigurePythonModelSelector(PLKSRBackendName)
                 PyGroup.Text = "PLKSR"
-                TileSizeHint.Text = "0 = full image first; falls back to smaller tiles on GPU memory errors."
+                TileSizeHint.Text = "0 tries full-image inference; on GPU memory errors," & Environment.NewLine & "the runner retries with smaller tiles."
                 MoveShowGroup(PyGroup)
             Case DAT2BackendName
                 ConfigurePythonModelSelector(DAT2BackendName)
                 PyGroup.Text = "PBRify DAT2"
-                TileSizeHint.Text = "0 = full image first; falls back to smaller tiles on GPU memory errors."
+                TileSizeHint.Text = "0 tries full-image inference; on GPU memory errors," & Environment.NewLine & "the runner retries with smaller tiles."
                 MoveShowGroup(PyGroup)
             Case SpandrelBackendName
                 ConfigurePythonModelSelector(SpandrelBackendName)
                 PyGroup.Text = "Spandrel"
-                TileSizeHint.Text = "0 = full image first; falls back to smaller tiles on GPU memory errors."
+                TileSizeHint.Text = "0 tries full-image inference; on GPU memory errors," & Environment.NewLine & "the runner retries with smaller tiles."
                 MoveShowGroup(PyGroup)
         End Select
         UpdateSpandrelModelInfo()
