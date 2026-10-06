@@ -917,14 +917,14 @@ Partial Class Form1
         'TileSizeHint
         '
         Me.TileSizeHint.AutoSize = False
-        Me.TileSizeHint.AutoEllipsis = False
+        Me.TileSizeHint.AutoEllipsis = True
         Me.TileSizeHint.ForeColor = System.Drawing.SystemColors.GrayText
-        Me.TileSizeHint.Location = New System.Drawing.Point(9, 170)
+        Me.TileSizeHint.Location = New System.Drawing.Point(9, 167)
         Me.TileSizeHint.Margin = New System.Windows.Forms.Padding(4, 0, 4, 0)
         Me.TileSizeHint.Name = "TileSizeHint"
-        Me.TileSizeHint.Size = New System.Drawing.Size(570, 36)
+        Me.TileSizeHint.Size = New System.Drawing.Size(570, 20)
         Me.TileSizeHint.TabIndex = 6
-        Me.TileSizeHint.Text = "Tile size limits inference memory use; 0 attempts full-image processing."
+        Me.TileSizeHint.Text = "0 = full image first; retries smaller tiles on GPU memory errors."
         '
         'SpandrelModelInfoLabel
         '
