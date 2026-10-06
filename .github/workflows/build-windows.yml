@@ -20,6 +20,14 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
+      - name: Set up Python for runner tests
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Spandrel runner tests
+        run: python -m unittest discover -s AutoCrispy/AutoCrispy/tests -v
+
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v2
 

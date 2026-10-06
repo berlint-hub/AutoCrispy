@@ -1,36 +1,36 @@
-# PBRify PLKSR and DAT2 setup
+# Spandrel upscalers: PLKSR, DAT2, and generic checkpoints
 
-AutoCrispy can run two fixed 4× PBRify texture upscalers through its bundled Spandrel helper:
+AutoCrispy can run the fixed PBRify 4× models and compatible checkpoints recognized by Spandrel. These are optional texture upscalers, not the full PBRify material workflow: AutoCrispy does not generate normal, roughness, or AO maps, and it does not need the chaiNNer GUI. Checkpoint weights and the Python/PyTorch runtime are installed separately; do not add model weights to the Git repository.
 
 - **PLKSR** — `4x-PBRify_RPLKSRd_V3.pth` (RealPLKSR-DySample)
 - **DAT2** — `4x-PBRify_UpscalerV4.pth` (DAT architecture / DAT2 model)
+- **Spandrel** — any checkpoint recognized by Spandrel as a 4× RGB super-resolution model
 
-These are optional live upscalers, not the full PBRify material workflow. AutoCrispy does not generate normal, roughness, or AO maps and does not need the chaiNNer GUI. The checkpoint and Python/PyTorch runtime are installed separately; do not add model weights to the Git repository.
+## 1. Install checkpoints
 
-## 1. Install a checkpoint
-
-Place the checkpoint beside your other backend folders. For the same layout as the ESRGAN backend, you can download the optional [PLKSR source ZIP](https://github.com/dslisleedh/PLKSR), extract it, and rename its folder to `PLKSR`; AutoCrispy does not execute those source files. For example:
+Place checkpoints in the configured backend folder, beside AutoCrispy, or beneath the program folder. The fixed PLKSR and DAT2 backends are detected by their exact `.pth` filenames. Example layout:
 
 ```text
 Backend/
-  ESRGAN/
-    esrgan.exe
-    models/...
   PLKSR/
-    (optional extracted PLKSR source files)
     4x-PBRify_RPLKSRd_V3.pth
   DAT2/
     4x-PBRify_UpscalerV4.pth
+  Spandrel/
+    my-4x-model.safetensors
+    another-model.pth
+    collection/
+      model.ckpt
 ```
 
-Download the exact `.pth` checkpoint you want to use from its release:
+Download the fixed checkpoints from their releases:
 
 - [4x-PBRify_RPLKSRd_V3](https://github.com/Kim2091/Kim2091-Models/releases/tag/4x-PBRify_RPLKSRd_V3)
 - [4x-PBRify_UpscalerV4](https://github.com/Kim2091/Kim2091-Models/releases/tag/4x-PBRify_UpscalerV4)
 
-AutoCrispy searches the configured backend folder and its nested folders, then the program folder, for each exact filename. The PLKSR source ZIP is optional; AutoCrispy does not execute that repository. Use the `.pth` asset from the V4 release. The two checkpoints are independent; install either or both.
+The optional [PLKSR source ZIP](https://github.com/dslisleedh/PLKSR) is not executed by AutoCrispy. Use the `.pth` asset from the V4 release. The PLKSR and DAT2 checkpoints are independent; install either or both.
 
-When detected, **PLKSR** and/or **DAT2** appear as separate entries in the backend dropdown. Their model selector shows the fixed checkpoint that was found. If both are installed, PLKSR remains the default; choose **DAT2** to use V4.
+For generic checkpoints, use a folder named **`Spandrel`** directly under the configured backend folder (or directly under AutoCrispy's program folder). The selector checks `.pth`, `.pt`, `.ckpt`, and `.safetensors` files in that folder and up to three nested folders. Each candidate is loaded through Spandrel; only image super-resolution models with scale 4 and three input and output channels appear in the selector. Unsupported, corrupt, non-SR, non-4×, or non-RGB checkpoints are skipped. The legacy **ESRGAN** selector remains separate and unchanged.
 
 ## 2. Install the inference runtime
 
@@ -42,14 +42,16 @@ Install a PyTorch build appropriate for the computer. For NVIDIA GPU acceleratio
 python -m pip install "spandrel==0.4.2" Pillow
 ```
 
-Spandrel 0.4.2 detects RealPLKSR-DySample and DAT architectures, so DAT2 V4 does not need a separate architecture package. AutoCrispy checks the detected scale, channels, and architecture before inference. If CUDA is unavailable, AutoCrispy falls back to CPU; CPU processing will be much slower.
+Spandrel 0.4.2 detects RealPLKSR-DySample, DAT architectures, and other supported architectures. AutoCrispy validates model scale, purpose, and channels before inference. If CUDA is unavailable, it falls back to CPU; CPU processing will be much slower. The generic selector validates candidate files on startup, so checking a folder containing many large checkpoints can take a little time.
 
-## 3. Use it in AutoCrispy
+## 3. Use a Spandrel model
 
-1. Start AutoCrispy and choose **PLKSR** or **DAT2** in the backend dropdown. If both are installed, PLKSR is preselected; choosing DAT2 leaves PLKSR available as an alternative.
-2. A saved chain entry using the exact legacy model `4x_gameai_2.0` is upgraded to PLKSR when it is installed, otherwise to DAT2 if that is the available PBRify backend. Other ESRGAN chains are left alone. If your chain is empty or still uses another model, add the desired backend from the chain tab.
-3. Start the watcher as usual. The helper loads the selected checkpoint once per batch, then processes the new textures.
+1. Start AutoCrispy. The exact PLKSR and DAT2 checkpoints appear as separate backends when installed. The generic **Spandrel** backend appears when at least one eligible checkpoint is found in the `Spandrel` folder.
+2. If PLKSR and DAT2 are both installed, PLKSR remains the default; DAT2 is preferred over generic Spandrel when PLKSR is absent. If only generic Spandrel models are found, that backend is selected. Choose a model from its selector, then add it from the chain tab if needed.
+3. Start the watcher as usual. The helper loads the selected checkpoint once per batch, then processes new textures.
+
+A saved chain entry using the exact legacy model `4x_gameai_2.0` is upgraded to PLKSR when it is installed, otherwise to DAT2 if that is the available fixed PBRify backend. Other ESRGAN chains are left alone.
 
 The tile-size setting controls the maximum inference tile size. Start at `512`; increase it for fewer tiles/faster processing if there is enough GPU memory, or lower it if inference runs out of memory. Set it to `0` to try processing each image without tiling; on an out-of-memory error, AutoCrispy retries with 512-pixel tiles and then smaller tiles automatically. The CPU checkbox forces CPU inference. **DAT2 V4 is substantially slower and more memory-intensive than the PLKSR V3 option**, so tiled inference is recommended for large textures.
 
-Both checkpoints are RGB 4× upscalers, not normal/roughness/AO generators. If an input has transparency, the runner upscales RGB and resizes its alpha channel separately with Lanczos. Use AutoCrispy's existing alpha/defringe settings as needed.
+These are RGB upscalers, not normal/roughness/AO generators. If an input has transparency, the runner upscales RGB and resizes its alpha channel separately with Lanczos. Use AutoCrispy's existing alpha/defringe settings as needed.

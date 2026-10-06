@@ -2,3 +2,5 @@
 4x-PBRify_RPLKSRd_V3.pth
 4x-PBRify_UpscalerV4.pth
 4x-PBRify_UpscalerV4.safetensors
+__pycache__/
+*.py[cod]

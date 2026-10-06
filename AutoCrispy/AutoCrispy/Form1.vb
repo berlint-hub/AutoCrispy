@@ -1,5 +1,7 @@
 Imports System.IO
 Imports System.Reflection
+Imports System.Threading
+Imports System.Threading.Tasks
 
 Public Class Form1
 
@@ -30,12 +32,16 @@ Public Class Form1
     Public Property PyModels As New List(Of String)
     Public Property PLKSRModelPath As String
     Public Property DAT2ModelPath As String
+    Public Property SupportedSpandrelModels As New List(Of String)
 
     Private Const PLKSRBackendName As String = "PLKSR"
     Private Const PLKSRCheckpointName As String = "4x-PBRify_RPLKSRd_V3.pth"
     Private Const DAT2BackendName As String = "DAT2"
     Private Const DAT2CheckpointName As String = "4x-PBRify_UpscalerV4.pth"
+    Private Const SpandrelBackendName As String = "Spandrel"
     Private Const SpandrelRunnerName As String = "spandrel_upscale.py"
+    Private SpandrelScanGeneration As Integer = 0
+    Private SpandrelScanCancellation As CancellationTokenSource
 
 #End Region
 
@@ -61,7 +67,7 @@ Public Class Form1
 
 #Region "Loading"
 
-    Private Sub Form1_Load(sender As Object, e As EventArgs) Handles MyBase.Load
+    Private Async Sub Form1_Load(sender As Object, e As EventArgs) Handles MyBase.Load
         Me.Size = New Size(660, 413)
         Me.SetStyle(ControlStyles.OptimizedDoubleBuffer, True)
         Application.CurrentCulture = New Globalization.CultureInfo("EN-US")
@@ -93,6 +99,7 @@ Public Class Form1
             If GetPreferredSpandrelBackendIndex() >= 0 Then ReplaceLegacyUpscalerChain()
             SetSettingsWindow()
         End If
+        Await RefreshSupportedSpandrelModels(Root)
         ChainControl.DrawList(ChainControl.ListItems)
         WatchDogButton.Select()
         ' Show the current input/output completion immediately, then keep it refreshed.
@@ -104,6 +111,13 @@ Public Class Form1
     End Sub
 
     Private Sub Form1_Closing(sender As Object, e As EventArgs) Handles MyBase.Closing
+        If SpandrelScanCancellation IsNot Nothing Then
+            Try
+                SpandrelScanCancellation.Cancel()
+            Catch ex As ObjectDisposedException
+                ' The scan already finished while the form was closing.
+            End Try
+        End If
         If PortableCheckBox.Checked = True Then
             File.WriteAllText(Root & "\portable.xml", Serialize(New FormSettings.Settings(Me)))
         Else
@@ -118,6 +132,7 @@ Public Class Form1
         PyPath = ""
         PLKSRModelPath = ""
         DAT2ModelPath = ""
+        SupportedSpandrelModels.Clear()
 
         If Not Directory.Exists(Root) Then
             PLKSRModelPath = FindSpandrelModel(Application.StartupPath, PLKSRCheckpointName)
@@ -175,7 +190,149 @@ Public Class Form1
         If DAT2ModelPath <> "" AndAlso Not ExeComboBox.Items.Contains(DAT2BackendName) Then
             ExeComboBox.Items.Add(DAT2BackendName)
         End If
+        If SupportedSpandrelModels.Count > 0 AndAlso FindPythonExecutable() <> "" AndAlso
+            Not ExeComboBox.Items.Contains(SpandrelBackendName) Then
+            ExeComboBox.Items.Add(SpandrelBackendName)
+        End If
     End Sub
+
+    Private Function FindGenericSpandrelModelFolder(SearchRoot As String) As String
+        If Not Directory.Exists(SearchRoot) Then Return ""
+        If Path.GetFileName(SearchRoot).Equals(SpandrelBackendName, StringComparison.OrdinalIgnoreCase) Then Return SearchRoot
+        Dim ModelFolder As String = Path.Combine(SearchRoot, SpandrelBackendName)
+        If Directory.Exists(ModelFolder) Then Return ModelFolder
+        Return ""
+    End Function
+
+    Private Async Function RefreshSupportedSpandrelModels(SearchRoot As String) As Task
+        SpandrelScanGeneration += 1
+        Dim ScanGeneration As Integer = SpandrelScanGeneration
+        Dim SelectedBackendBeforeScan As String = If(ExeComboBox.SelectedItem, "").ToString()
+
+        If SpandrelScanCancellation IsNot Nothing Then
+            Try
+                SpandrelScanCancellation.Cancel()
+            Catch ex As ObjectDisposedException
+                ' A completed scan may dispose its source before a new request cancels it.
+            End Try
+            SpandrelScanCancellation = Nothing
+        End If
+        SupportedSpandrelModels.Clear()
+
+        Dim ModelFolders As New List(Of String)
+        Dim ModelFolder As String = FindGenericSpandrelModelFolder(SearchRoot)
+        If ModelFolder <> "" Then ModelFolders.Add(ModelFolder)
+        If Not String.Equals(SearchRoot, Application.StartupPath, StringComparison.OrdinalIgnoreCase) Then
+            ModelFolder = FindGenericSpandrelModelFolder(Application.StartupPath)
+            If ModelFolder <> "" AndAlso Not ModelFolders.Contains(ModelFolder, StringComparer.OrdinalIgnoreCase) Then
+                ModelFolders.Add(ModelFolder)
+            End If
+        End If
+
+        Dim PythonExecutable As String = FindPythonExecutable()
+        Dim RunnerPath As String = Path.Combine(Application.StartupPath, SpandrelRunnerName)
+        If ModelFolders.Count = 0 OrElse PythonExecutable = "" OrElse Not File.Exists(RunnerPath) Then
+            If ScanGeneration = SpandrelScanGeneration AndAlso Not IsDisposed Then WatchDogButton.Enabled = True
+            Return
+        End If
+
+        WatchDogButton.Enabled = False
+        Dim DebugEnabled As Boolean = DebugCheckbox.Checked
+        Dim ScanCancellation As New CancellationTokenSource()
+        SpandrelScanCancellation = ScanCancellation
+        Try
+            ' Avoid launching model scans while the backend path is still being edited.
+            Await Task.Delay(250, ScanCancellation.Token)
+            If ScanGeneration <> SpandrelScanGeneration Then Return
+
+            Dim FoundModels As List(Of String) = Await Task.Run(
+                Function() ScanSpandrelModelFolders(ModelFolders, PythonExecutable, RunnerPath, DebugEnabled, ScanCancellation.Token),
+                ScanCancellation.Token)
+            If ScanGeneration <> SpandrelScanGeneration OrElse ScanCancellation.IsCancellationRequested Then Return
+
+            SupportedSpandrelModels = FoundModels
+            If SupportedSpandrelModels.Count > 0 Then
+                AddSpandrelBackends()
+                Dim CurrentBackend As String = If(ExeComboBox.SelectedItem, "").ToString()
+                If String.Equals(CurrentBackend, SelectedBackendBeforeScan, StringComparison.OrdinalIgnoreCase) Then
+                    Dim PreferredBackendIndex As Integer = GetPreferredSpandrelBackendIndex()
+                    If PreferredBackendIndex >= 0 Then ExeComboBox.SelectedIndex = PreferredBackendIndex
+                End If
+            End If
+        Catch ex As OperationCanceledException
+            ' A newer folder scan superseded this request.
+        Catch ex As Exception
+            If DebugEnabled Then System.Diagnostics.Debug.WriteLine("Spandrel model scan failed: " & ex.Message)
+        Finally
+            If ScanGeneration = SpandrelScanGeneration Then
+                SpandrelScanCancellation = Nothing
+                If Not IsDisposed Then WatchDogButton.Enabled = True
+            End If
+            ScanCancellation.Dispose()
+        End Try
+    End Function
+
+    Private Function ScanSpandrelModelFolders(ModelFolders As List(Of String), PythonExecutable As String, RunnerPath As String, DebugEnabled As Boolean, ScanToken As CancellationToken) As List(Of String)
+        For Each ModelFolder As String In ModelFolders
+            ScanToken.ThrowIfCancellationRequested()
+            Dim Models As List(Of String) = ScanSpandrelModelFolder(ModelFolder, PythonExecutable, RunnerPath, DebugEnabled, ScanToken)
+            If Models.Count > 0 Then Return Models
+        Next
+        Return New List(Of String)
+    End Function
+
+    Private Function ScanSpandrelModelFolder(ModelFolder As String, PythonExecutable As String, RunnerPath As String, DebugEnabled As Boolean, ScanToken As CancellationToken) As List(Of String)
+        Dim Result As New List(Of String)
+        Try
+            Dim ScanInfo As New ProcessStartInfo(PythonExecutable, MakeSpandrelListCommand(RunnerPath, ModelFolder, DebugEnabled))
+            ScanInfo.WorkingDirectory = Application.StartupPath
+            ScanInfo.RedirectStandardOutput = True
+            ScanInfo.RedirectStandardError = True
+            ScanInfo.UseShellExecute = False
+            ScanInfo.CreateNoWindow = True
+            Using ScanProcess As Process = Process.Start(ScanInfo)
+                If ScanProcess Is Nothing Then Return Result
+                Using CancellationRegistration As CancellationTokenRegistration = ScanToken.Register(
+                    Sub()
+                        Try
+                            If Not ScanProcess.HasExited Then ScanProcess.Kill()
+                        Catch ex As Exception
+                        End Try
+                    End Sub)
+                    Dim StandardOutputTask = ScanProcess.StandardOutput.ReadToEndAsync()
+                    Dim StandardErrorTask = ScanProcess.StandardError.ReadToEndAsync()
+                    ScanProcess.WaitForExit()
+                    Dim StandardOutput As String = StandardOutputTask.Result
+                    Dim StandardError As String = StandardErrorTask.Result
+                    ScanToken.ThrowIfCancellationRequested()
+                    If ScanProcess.ExitCode <> 0 Then
+                        If DebugEnabled AndAlso StandardError.Trim() <> "" Then
+                            System.Diagnostics.Debug.WriteLine("Spandrel model scan failed: " & StandardError.Trim())
+                        End If
+                        Return Result
+                    End If
+
+                    Dim SeenModels As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+                    For Each OutputLine As String In StandardOutput.Split(New String() {vbCrLf, vbLf}, StringSplitOptions.RemoveEmptyEntries)
+                        If OutputLine.StartsWith("MODEL:", StringComparison.Ordinal) Then
+                            Try
+                                Dim EncodedPath As String = OutputLine.Substring("MODEL:".Length)
+                                Dim ModelPath As String = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(EncodedPath))
+                                If File.Exists(ModelPath) AndAlso SeenModels.Add(ModelPath) Then Result.Add(ModelPath)
+                            Catch ex As Exception
+                                If DebugEnabled Then System.Diagnostics.Debug.WriteLine("Invalid Spandrel model scan result: " & ex.Message)
+                            End Try
+                        End If
+                    Next
+                End Using
+            End Using
+        Catch ex As OperationCanceledException
+            Throw
+        Catch ex As Exception
+            If DebugEnabled Then System.Diagnostics.Debug.WriteLine("Spandrel model scan failed: " & ex.Message)
+        End Try
+        Return Result
+    End Function
 
     Private Function FindSpandrelModel(SearchRoot As String, CheckpointName As String) As String
         If Not Directory.Exists(SearchRoot) Then Return ""
@@ -202,7 +359,9 @@ Public Class Form1
     Private Function GetPreferredSpandrelBackendIndex() As Integer
         Dim PreferredIndex As Integer = ExeComboBox.Items.IndexOf(PLKSRBackendName)
         If PreferredIndex >= 0 Then Return PreferredIndex
-        Return ExeComboBox.Items.IndexOf(DAT2BackendName)
+        PreferredIndex = ExeComboBox.Items.IndexOf(DAT2BackendName)
+        If PreferredIndex >= 0 Then Return PreferredIndex
+        Return ExeComboBox.Items.IndexOf(SpandrelBackendName)
     End Function
 
     Private Function GetPreferredSpandrelBackendName() As String
@@ -217,6 +376,10 @@ Public Class Form1
                 Return PLKSRModelPath
             Case DAT2BackendName
                 Return DAT2ModelPath
+            Case SpandrelBackendName
+                If PyModel.SelectedIndex >= 0 AndAlso PyModel.SelectedIndex < SupportedSpandrelModels.Count Then
+                    Return SupportedSpandrelModels(PyModel.SelectedIndex)
+                End If
         End Select
         Return ""
     End Function
@@ -293,7 +456,7 @@ Public Class Form1
         ExeTextBox.Text = GetFolder()
     End Sub
 
-    Private Sub ExeTextBox_TextChanged(sender As Object, e As EventArgs) Handles ExeTextBox.TextChanged
+    Private Async Sub ExeTextBox_TextChanged(sender As Object, e As EventArgs) Handles ExeTextBox.TextChanged
         If Directory.Exists(ExeTextBox.Text) = True Then
             Root = ExeTextBox.Text
         Else
@@ -307,6 +470,7 @@ Public Class Form1
             If GetPreferredSpandrelBackendIndex() >= 0 Then ReplaceLegacyUpscalerChain()
             SetSettingsWindow()
         End If
+        Await RefreshSupportedSpandrelModels(Root)
     End Sub
 
     Private Sub DefringeCheck_CheckedChanged(sender As Object, e As EventArgs) Handles DefringeCheck.CheckedChanged
@@ -498,6 +662,10 @@ Public Class Form1
                 ConfigurePythonModelSelector(DAT2BackendName)
                 PyGroup.Text = "PBRify DAT2"
                 MoveShowGroup(PyGroup)
+            Case SpandrelBackendName
+                ConfigurePythonModelSelector(SpandrelBackendName)
+                PyGroup.Text = "Spandrel"
+                MoveShowGroup(PyGroup)
         End Select
     End Sub
 
@@ -511,6 +679,12 @@ Public Class Form1
                 PyModel.SelectedIndex = 0
             End If
             PyModel.Enabled = False
+        ElseIf BackendName = SpandrelBackendName Then
+            For Each ModelPath As String In SupportedSpandrelModels
+                PyModel.Items.Add(Path.GetFileName(ModelPath))
+            Next
+            If PyModel.Items.Count > 0 Then PyModel.SelectedIndex = 0
+            PyModel.Enabled = True
         Else
             For Each ModelPath As String In PyModels
                 PyModel.Items.Add(Path.GetFileName(ModelPath))
@@ -523,7 +697,7 @@ Public Class Form1
 
     Public Function GetSelectedUpscaleModel() As String
         Dim BackendName As String = If(ExeComboBox.SelectedItem, "").ToString()
-        If BackendName = PLKSRBackendName OrElse BackendName = DAT2BackendName Then
+        If BackendName = PLKSRBackendName OrElse BackendName = DAT2BackendName OrElse BackendName = SpandrelBackendName Then
             Return GetSpandrelModelPath(BackendName)
         End If
         If PyModel.SelectedIndex >= 0 AndAlso PyModel.SelectedIndex < PyModels.Count Then
@@ -776,7 +950,7 @@ Public Class Form1
         If ImageList.Count > 0 Then
             Dim BuildProcess As ProcessStartInfo
             Dim IsSpandrelBackend As Boolean = IsSpandrelPackageType(Model.PackageType)
-            Dim BackendDisplay As String = If(Model.PackageType = DAT2BackendName, "DAT2", "RealPLKSR")
+            Dim BackendDisplay As String = If(Model.PackageType = DAT2BackendName, "DAT2", If(Model.PackageType = SpandrelBackendName, "Spandrel", "RealPLKSR"))
             If Model.PackageType = "ESRGAN" OrElse IsSpandrelBackend OrElse Model.PackageType.Contains("Vulkan") Then
                 If IsSpandrelBackend Then
                     Dim PythonExecutable As String = FindPythonExecutable()
@@ -851,7 +1025,7 @@ Public Class Form1
     End Sub
 
     Private Function IsSpandrelPackageType(PackageType As String) As Boolean
-        Return PackageType = "RealPLKSR" OrElse PackageType = DAT2BackendName
+        Return PackageType = "RealPLKSR" OrElse PackageType = DAT2BackendName OrElse PackageType = SpandrelBackendName
     End Function
 
     Private Function GetChainPath(PathType As String, PathIndex As Integer) As String
@@ -885,7 +1059,9 @@ Public Class Form1
             Case "ESRGAN"
                 Return MakePyCommand(Source, Dest, Package)
             Case "RealPLKSR", DAT2BackendName
-                Return MakeSpandrelCommand(Source, Dest, Package)
+                Return MakeSpandrelCommand(Source, Dest, Package, False)
+            Case SpandrelBackendName
+                Return MakeSpandrelCommand(Source, Dest, Package, True)
         End Select
         Return ""
     End Function
@@ -928,6 +1104,10 @@ Public Class Form1
             Case DAT2BackendName
                 ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, "PBRify V4 DAT2 4x", ChainThumbs.Item(6)))
                 ChainList.Add(New FormSettings.ChainObject("PBRify V4 DAT2 4x", 6, "", DAT2BackendName, Me))
+            Case SpandrelBackendName
+                Dim ModelDisplayName As String = "Spandrel 4x - " & Path.GetFileName(GetSelectedUpscaleModel())
+                ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, ModelDisplayName, ChainThumbs.Item(6)))
+                ChainList.Add(New FormSettings.ChainObject(ModelDisplayName, 6, "", SpandrelBackendName, Me))
         End Select
         ChainControl.DrawList(ChainControl.ListItems)
     End Sub
@@ -1033,7 +1213,7 @@ Public Class Form1
         Return Result.GetArguements
     End Function
 
-    Private Function MakeSpandrelCommand(SourceFolder As String, DestFolder As String, Package As FormSettings.PythonPackage) As String
+    Private Function MakeSpandrelCommand(SourceFolder As String, DestFolder As String, Package As FormSettings.PythonPackage, GenericModel As Boolean) As String
         Dim Result As New ArguementString
         Result.AddArguement(Quote(Path.Combine(Application.StartupPath, SpandrelRunnerName)))
         Result.AddArguement(Quote(Package.Model))
@@ -1041,7 +1221,16 @@ Public Class Form1
         Result.AddArguement("--output", Quote(DestFolder))
         Result.AddArguement("--tile-size", Package.TileSize.ToString())
         Result.AddArguement("--cpu", Package.CPUOnly)
+        If GenericModel Then Result.AddArguement("--generic-model")
         If LoadedSettings.ExpertSettings.Logging Then Result.AddArguement("--debug")
+        Return Result.GetArguements
+    End Function
+
+    Private Function MakeSpandrelListCommand(RunnerPath As String, ModelFolder As String, DebugEnabled As Boolean) As String
+        Dim Result As New ArguementString
+        Result.AddArguement(Quote(RunnerPath))
+        Result.AddArguement("--list-models", Quote(ModelFolder))
+        If DebugEnabled Then Result.AddArguement("--debug")
         Return Result.GetArguements
     End Function
 

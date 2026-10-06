@@ -8,6 +8,8 @@ is kept resident for the whole batch.
 from __future__ import annotations
 
 import argparse
+import base64
+import gc
 import sys
 import traceback
 from pathlib import Path
@@ -32,15 +34,23 @@ MODEL_PROFILES = {
 }
 MODEL_SCALE = 4
 TILE_OVERLAP = 32
+MODEL_FILE_EXTENSIONS = {".pth", ".pt", ".ckpt", ".safetensors"}
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Upscale a folder of textures with a supported PBRify checkpoint."
+        description="Upscale a folder of textures with Spandrel-supported 4x RGB models."
     )
-    parser.add_argument("model", type=Path, help="Supported PBRify .pth checkpoint")
-    parser.add_argument("--input", required=True, type=Path, help="Input folder")
-    parser.add_argument("--output", required=True, type=Path, help="Output folder")
+    parser.add_argument(
+        "--list-models",
+        type=Path,
+        help="List supported 4x RGB super-resolution checkpoints in a folder and exit",
+    )
+    parser.add_argument(
+        "model", type=Path, nargs="?", help="PyTorch checkpoint to run"
+    )
+    parser.add_argument("--input", type=Path, help="Input folder")
+    parser.add_argument("--output", type=Path, help="Output folder")
     parser.add_argument(
         "--tile-size",
         type=int,
@@ -51,29 +61,39 @@ def parse_args() -> argparse.Namespace:
         "--cpu", action="store_true", help="Force CPU inference instead of CUDA"
     )
     parser.add_argument(
+        "--generic-model",
+        action="store_true",
+        help="Allow any Spandrel-recognized 4x RGB super-resolution checkpoint",
+    )
+    parser.add_argument(
         "--debug", action="store_true", help="Print a full traceback on errors"
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.list_models is None and (args.model is None or args.input is None or args.output is None):
+        parser.error("model, --input, and --output are required unless --list-models is used")
+    return args
 
 
-def _load_model(model_path: Path, force_cpu: bool) -> tuple[Any, Any, Any, str]:
+def _load_model(
+    model_path: Path, force_cpu: bool, generic_model: bool = False
+) -> tuple[Any, Any, Any, str]:
     try:
         import torch
         from spandrel import ImageModelDescriptor, ModelLoader
     except ImportError as error:
         raise RuntimeError(
-            "The PBRify upscalers need PyTorch and Spandrel. Follow "
+            "Spandrel upscalers need PyTorch and Spandrel. Follow "
             "PLKSR_SETUP.md to install them in AutoCrispy's Python environment."
         ) from error
 
     profile = MODEL_PROFILES.get(model_path.name.casefold())
-    if profile is None:
-        supported = f"{PLKSR_MODEL_NAME}, {DAT2_MODEL_NAME}"
+    if not generic_model and profile is None:
+        supported = f"{PLKSR_MODEL_NAME}, {DAT2_MODEL_NAME}, or pass --generic-model"
         raise ValueError(f"This AutoCrispy runner supports only: {supported}.")
     if not model_path.is_file():
         raise FileNotFoundError(f"Checkpoint not found: {model_path}")
 
-    display_name, expected_architecture = profile
+    display_name, expected_architecture = profile if profile is not None else ("Spandrel", None)
     device = torch.device(
         "cpu" if force_cpu or not torch.cuda.is_available() else "cuda:0"
     )
@@ -89,7 +109,9 @@ def _load_model(model_path: Path, force_cpu: bool) -> tuple[Any, Any, Any, str]:
         and descriptor.input_channels == 3
         and descriptor.output_channels == 3
     )
-    if display_name == "RealPLKSR-DySample":
+    if generic_model:
+        model_valid = True
+    elif display_name == "RealPLKSR-DySample":
         model_valid = "real" in tags and "dysample" in tags
     else:
         model_valid = (
@@ -98,13 +120,14 @@ def _load_model(model_path: Path, force_cpu: bool) -> tuple[Any, Any, Any, str]:
         )
 
     if not common_valid or not model_valid:
-        expected_description = (
-            "4x RealPLKSR-DySample RGB"
-            if display_name == "RealPLKSR-DySample"
-            else "4x DAT RGB"
-        )
+        if generic_model:
+            expected_description = "a Spandrel-supported 4x RGB super-resolution"
+        elif display_name == "RealPLKSR-DySample":
+            expected_description = "a 4x RealPLKSR-DySample RGB"
+        else:
+            expected_description = "a 4x DAT RGB"
         raise ValueError(
-            f"Expected the {expected_description} checkpoint {model_path.name}; "
+            f"Expected {expected_description} checkpoint {model_path.name}; "
             f"Spandrel detected architecture={architecture}, purpose={descriptor.purpose}, "
             f"scale={descriptor.scale}, "
             f"channels={descriptor.input_channels}->{descriptor.output_channels}, "
@@ -283,13 +306,77 @@ def _process_image(
     result.save(output_path, **save_options)
 
 
+def list_supported_models(model_root: Path, debug: bool = False) -> int:
+    if not model_root.is_dir():
+        raise NotADirectoryError(f"Model folder not found: {model_root}")
+
+    try:
+        import torch
+        from spandrel import ImageModelDescriptor, ModelLoader
+    except ImportError as error:
+        raise RuntimeError(
+            "Listing Spandrel models needs PyTorch and Spandrel in AutoCrispy's Python environment."
+        ) from error
+
+    loader = ModelLoader(torch.device("cpu"))
+    candidates: list[Path] = []
+    pending_folders = [(model_root, 0)]
+    while pending_folders:
+        folder, folder_depth = pending_folders.pop()
+        try:
+            entries = sorted(folder.iterdir(), key=lambda path: path.name.casefold())
+        except OSError:
+            continue
+        for path in entries:
+            if path.is_dir() and not path.is_symlink():
+                if folder_depth < 3:
+                    pending_folders.append((path, folder_depth + 1))
+                continue
+            if (
+                path.is_file()
+                and path.suffix.casefold() in MODEL_FILE_EXTENSIONS
+            ):
+                candidates.append(path)
+    candidates.sort(key=lambda path: str(path).casefold())
+
+    for checkpoint in candidates:
+        try:
+            descriptor = loader.load_from_file(checkpoint)
+            supported = (
+                isinstance(descriptor, ImageModelDescriptor)
+                and descriptor.purpose == "SR"
+                and descriptor.scale == MODEL_SCALE
+                and descriptor.input_channels == 3
+                and descriptor.output_channels == 3
+            )
+            if supported:
+                encoded_path = base64.b64encode(
+                    str(checkpoint.resolve()).encode("utf-8")
+                ).decode("ascii")
+                print(f"MODEL:{encoded_path}", flush=True)
+        except Exception as error:
+            if debug:
+                print(f"Skipping {checkpoint.name}: {error}", file=sys.stderr)
+        finally:
+            if "descriptor" in locals():
+                del descriptor
+            gc.collect()
+
+    return 0
+
+
 def run(args: argparse.Namespace) -> int:
+    if args.model is None or args.input is None or args.output is None:
+        raise ValueError("A checkpoint, input folder, and output folder are required.")
     if not args.input.is_dir():
         raise NotADirectoryError(f"Input folder not found: {args.input}")
     args.output.mkdir(parents=True, exist_ok=True)
 
-    model, device, dtype, device_name = _load_model(args.model, args.cpu)
-    display_name = MODEL_PROFILES[args.model.name.casefold()][0]
+    model, device, dtype, device_name = _load_model(
+        args.model, args.cpu, args.generic_model
+    )
+    profile = MODEL_PROFILES.get(args.model.name.casefold())
+    display_name = profile[0] if profile is not None else str(model.architecture.id)
     print(
         f"Loaded {args.model.name}: {display_name} x{model.scale} on "
         f"{device_name} ({dtype})."
@@ -317,6 +404,8 @@ def run(args: argparse.Namespace) -> int:
 def main() -> int:
     args = parse_args()
     try:
+        if args.list_models is not None:
+            return list_supported_models(args.list_models, args.debug)
         return run(args)
     except Exception as error:
         print(f"AutoCrispy Spandrel error: {error}", file=sys.stderr)
