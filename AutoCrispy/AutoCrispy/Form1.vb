@@ -914,7 +914,9 @@ Public Class Form1
         AutoPainterSharePercent.Visible = Model.IsAutoTextureRouter
         AutoPainterShareSuffix.Visible = Model.IsAutoTextureRouter
         If Model.IsAutoTextureRouter Then
-            SpandrelModelInfoLabel.Text = "Experimental auto-routing: up to " & CInt(AutoPainterSharePercent.Value).ToString() & "% Painter for detailed/repeating textures; the rest use Architect."
+            Dim PainterShareText As String = CInt(AutoPainterSharePercent.Value).ToString()
+            AutoPainterShareSuffix.Text = PainterShareText & "% max of detailed/repeating textures to Painter"
+            SpandrelModelInfoLabel.Text = "Experimental auto-routing: up to " & PainterShareText & "% Painter for detailed/repeating textures; the rest use Architect."
             Dim RouterTooltip As String = "Feature-based routing (not semantic object recognition). Architect: " & Model.ArchitectModelPath &
                 Environment.NewLine & "Painter: " & Model.PainterModelPath
             UiToolTip.SetToolTip(SpandrelModelInfoLabel, RouterTooltip)
@@ -1306,6 +1308,9 @@ Public Class Form1
 
         Dim BuildProcess As ProcessStartInfo
         Dim IsSpandrelBackend As Boolean = IsSpandrelPackageType(Model.PackageType)
+        Dim IsAutoRouteRun As Boolean = IsSpandrelBackend AndAlso
+            TypeOf Model.Package Is FormSettings.PythonPackage AndAlso
+            DirectCast(Model.Package, FormSettings.PythonPackage).AutoRouteEnabled
         Dim BackendDisplay As String = If(Model.PackageType = DAT2BackendName, "DAT2", If(Model.PackageType = SpandrelBackendName, "Spandrel", "RealPLKSR"))
         If Model.PackageType = "ESRGAN" OrElse IsSpandrelBackend OrElse Model.PackageType.Contains("Vulkan") Then
             If IsSpandrelBackend Then
@@ -1341,7 +1346,7 @@ Public Class Form1
                         DeleteCancelledOutputs(DestPath, ImageList)
                         Return
                     End If
-                    If LoadedSettings.ExpertSettings.Logging OrElse BatchProcess.ExitCode <> 0 Then
+                    If LoadedSettings.ExpertSettings.Logging OrElse IsAutoRouteRun OrElse BatchProcess.ExitCode <> 0 Then
                         WriteProcessLog(BuildProcess, StandardOutput, StandardError, LoadedSettings.Paths.OutputPath, Model.PackageType)
                     End If
                     If BatchProcess.ExitCode <> 0 Then

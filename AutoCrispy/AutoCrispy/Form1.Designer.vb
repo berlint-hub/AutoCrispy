@@ -889,17 +889,18 @@ Partial Class Form1
         Me.AutoPainterSharePercent.Name = "AutoPainterSharePercent"
         Me.AutoPainterSharePercent.Size = New System.Drawing.Size(64, 26)
         Me.AutoPainterSharePercent.TabIndex = 11
+        Me.AutoPainterSharePercent.TextAlign = System.Windows.Forms.HorizontalAlignment.Center
         Me.AutoPainterSharePercent.Value = New Decimal(New Integer() {30, 0, 0, 0})
         Me.AutoPainterSharePercent.Visible = False
         '
         'AutoPainterShareSuffix
         '
-        Me.AutoPainterShareSuffix.AutoSize = True
+        Me.AutoPainterShareSuffix.AutoEllipsis = True
         Me.AutoPainterShareSuffix.Location = New System.Drawing.Point(176, 198)
         Me.AutoPainterShareSuffix.Name = "AutoPainterShareSuffix"
-        Me.AutoPainterShareSuffix.Size = New System.Drawing.Size(201, 20)
+        Me.AutoPainterShareSuffix.Size = New System.Drawing.Size(390, 20)
         Me.AutoPainterShareSuffix.TabIndex = 12
-        Me.AutoPainterShareSuffix.Text = "% of detailed textures to Painter"
+        Me.AutoPainterShareSuffix.Text = "30% max of detailed/repeating textures to Painter"
         Me.AutoPainterShareSuffix.Visible = False
         '
         'PyCPU

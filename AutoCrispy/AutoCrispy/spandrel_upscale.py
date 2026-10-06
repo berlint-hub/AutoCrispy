@@ -175,17 +175,11 @@ def _load_model(
             f"tags={sorted(tags)}."
         )
 
-    # Use the checkpoint's advertised precision support. DAT does not support
-    # fp16 in Spandrel, but supported GPUs can run it in bfloat16 instead.
+    # Use fp16 only when the checkpoint explicitly advertises support. Some
+    # community checkpoints advertise bfloat16 but still mix float32-only
+    # operations in their forward pass; float32 is the safe fallback.
     if device.type == "cuda" and descriptor.supports_half:
         dtype = torch.float16
-    elif (
-        device.type == "cuda"
-        and getattr(descriptor, "supports_bfloat16", False)
-        and hasattr(torch.cuda, "is_bf16_supported")
-        and torch.cuda.is_bf16_supported()
-    ):
-        dtype = torch.bfloat16
     else:
         dtype = torch.float32
 
@@ -536,13 +530,17 @@ def _run_auto_route(args: argparse.Namespace) -> int:
     painter_files = _select_painter_files(scored_files, args.painter_share)
     architect_count = len(files) - len(painter_files)
     print(
-        f"Auto routing: {architect_count} Architect, {len(painter_files)} Painter "
-        f"(Painter cap {args.painter_share}%; feature-based, not semantic).",
+        f"AUTOCRISPY_ROUTE_SUMMARY: total={len(files)}; Architect={architect_count}; "
+        f"Painter={len(painter_files)}; PainterCap={args.painter_share}% "
+        "(feature-based, not semantic).",
         flush=True,
     )
     print(
-        f"Loaded Architect {args.architect_model.name} and Painter {args.painter_model.name} "
-        f"on {architect_device_name}/{painter_device_name}.",
+        "AUTOCRISPY_MODELS: "
+        f"Architect={args.architect_model.resolve()} "
+        f"(device={architect_device_name}, dtype={architect_dtype}); "
+        f"Painter={args.painter_model.resolve()} "
+        f"(device={painter_device_name}, dtype={painter_dtype}).",
         flush=True,
     )
 
@@ -578,6 +576,10 @@ def _run_auto_route(args: argparse.Namespace) -> int:
             device,
             dtype,
             args.tile_size,
+        )
+        print(
+            f"AUTOCRISPY_RESULT: {index}/{len(files)} · {role} · {input_path.name} · OK",
+            flush=True,
         )
 
     print(f"Auto-routed and upscaled {len(files)} image(s).", flush=True)

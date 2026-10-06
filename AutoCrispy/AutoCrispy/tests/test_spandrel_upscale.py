@@ -175,6 +175,27 @@ class SpandrelRunnerTests(unittest.TestCase):
             self.assertEqual(descriptor.to_args, (device, dtype))
             self.assertTrue(descriptor.model.evaluated)
 
+    def test_cuda_uses_float32_when_checkpoint_only_advertises_bfloat16(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkpoint = Path(temporary) / "bf16-model.pth"
+            checkpoint.touch()
+            descriptor = FakeImageDescriptor(architecture="SomeRegisteredSR")
+            descriptor.supports_bfloat16 = True
+            torch, spandrel = self.make_fake_modules({checkpoint.name: descriptor})
+            torch.cuda = types.SimpleNamespace(
+                is_available=lambda: True,
+                is_bf16_supported=lambda: True,
+            )
+            with patch.dict(sys.modules, {"torch": torch, "spandrel": spandrel}):
+                loaded, device, dtype, _ = runner._load_model(
+                    checkpoint, force_cpu=False, generic_model=True
+                )
+
+            self.assertIs(loaded, descriptor)
+            self.assertEqual(device.type, "cuda")
+            self.assertIs(dtype, torch.float32)
+            self.assertEqual(descriptor.to_args, (device, torch.float32))
+
     def test_generic_loading_accepts_1x_dxt_decompressor(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             checkpoint = Path(temporary) / "1x-DXTDecompressor-Source-V3.pth"
@@ -214,6 +235,55 @@ class SpandrelRunnerTests(unittest.TestCase):
             self.assertIsNone(args.model)
             self.assertIsNone(args.input)
             self.assertIsNone(args.output)
+
+    def test_auto_route_logs_selected_models_and_completed_roles(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_folder = root / "input"
+            output_folder = root / "output"
+            input_folder.mkdir()
+            architect_file = input_folder / "a-architect.png"
+            painter_file = input_folder / "z-painter.png"
+            architect_file.touch()
+            painter_file.touch()
+            architect_path = root / "best_realesrnet.pth"
+            painter_path = root / "best_swinir.pth"
+            architect = FakeImageDescriptor()
+            painter = FakeImageDescriptor()
+            args = types.SimpleNamespace(
+                input=input_folder,
+                output=output_folder,
+                architect_model=architect_path,
+                painter_model=painter_path,
+                cpu=False,
+                tile_size=512,
+                painter_share=30,
+                debug=False,
+            )
+
+            def fake_load_model(path: Path, _force_cpu: bool, generic_model: bool):
+                model = architect if path == architect_path else painter
+                return model, FakeDevice("cuda:0"), "float32", "cuda:0"
+
+            def fake_features(path: Path) -> dict[str, float]:
+                return {"score": 0.5 if path == painter_file else 0.1}
+
+            output = io.StringIO()
+            with (
+                patch.object(runner, "_load_model", side_effect=fake_load_model),
+                patch.object(runner, "_texture_features", side_effect=fake_features),
+                patch.object(runner, "_process_image"),
+                contextlib.redirect_stdout(output),
+            ):
+                result = runner._run_auto_route(args)
+
+            self.assertEqual(result, 0)
+            log = output.getvalue()
+            self.assertIn("AUTOCRISPY_ROUTE_SUMMARY: total=2; Architect=1; Painter=1", log)
+            self.assertIn(f"AUTOCRISPY_MODELS: Architect={architect_path.resolve()}", log)
+            self.assertIn(f"Painter={painter_path.resolve()}", log)
+            self.assertIn("AUTOCRISPY_RESULT: 1/2 · Architect · a-architect.png · OK", log)
+            self.assertIn("AUTOCRISPY_RESULT: 2/2 · Painter · z-painter.png · OK", log)
 
     def test_auto_route_cli_accepts_two_models_without_a_single_model_argument(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
