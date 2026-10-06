@@ -93,6 +93,9 @@ Partial Class Form1
         Me.SpandrelModelInfoLabel = New System.Windows.Forms.Label()
         Me.SpandrelScanStatusLabel = New System.Windows.Forms.Label()
         Me.RefreshSpandrelModelsButton = New System.Windows.Forms.Button()
+        Me.AutoPainterShareLabel = New System.Windows.Forms.Label()
+        Me.AutoPainterSharePercent = New System.Windows.Forms.NumericUpDown()
+        Me.AutoPainterShareSuffix = New System.Windows.Forms.Label()
         Me.WorkHorse = New System.ComponentModel.BackgroundWorker()
         Me.ChainGroup = New System.Windows.Forms.TabPage()
         Me.ChainPreview = New System.Windows.Forms.PictureBox()
@@ -160,6 +163,7 @@ Partial Class Form1
         CType(Me.AnimeCPPScale, System.ComponentModel.ISupportInitialize).BeginInit()
         Me.PyGroup.SuspendLayout()
         CType(Me.PyTileSize, System.ComponentModel.ISupportInitialize).BeginInit()
+        CType(Me.AutoPainterSharePercent, System.ComponentModel.ISupportInitialize).BeginInit()
         Me.ChainGroup.SuspendLayout()
         CType(Me.ChainPreview, System.ComponentModel.ISupportInitialize).BeginInit()
         Me.ChainContext.SuspendLayout()
@@ -846,6 +850,9 @@ Partial Class Form1
         'PyGroup
         '
         Me.PyGroup.Controls.Add(Me.PyCPU)
+        Me.PyGroup.Controls.Add(Me.AutoPainterShareSuffix)
+        Me.PyGroup.Controls.Add(Me.AutoPainterSharePercent)
+        Me.PyGroup.Controls.Add(Me.AutoPainterShareLabel)
         Me.PyGroup.Controls.Add(Me.TileSizeHint)
         Me.PyGroup.Controls.Add(Me.PyTileSize)
         Me.PyGroup.Controls.Add(Me.SpandrelScanStatusLabel)
@@ -862,6 +869,38 @@ Partial Class Form1
         Me.PyGroup.TabIndex = 12
         Me.PyGroup.TabStop = False
         Me.PyGroup.Text = "ESRGAN"
+        '
+        'AutoPainterShareLabel
+        '
+        Me.AutoPainterShareLabel.AutoSize = True
+        Me.AutoPainterShareLabel.Location = New System.Drawing.Point(9, 198)
+        Me.AutoPainterShareLabel.Name = "AutoPainterShareLabel"
+        Me.AutoPainterShareLabel.Size = New System.Drawing.Size(83, 20)
+        Me.AutoPainterShareLabel.TabIndex = 10
+        Me.AutoPainterShareLabel.Text = "Painter share:"
+        Me.AutoPainterShareLabel.Visible = False
+        '
+        'AutoPainterSharePercent
+        '
+        Me.AutoPainterSharePercent.Location = New System.Drawing.Point(105, 194)
+        Me.AutoPainterSharePercent.Minimum = New Decimal(New Integer() {10, 0, 0, 0})
+        Me.AutoPainterSharePercent.Maximum = New Decimal(New Integer() {90, 0, 0, 0})
+        Me.AutoPainterSharePercent.Increment = New Decimal(New Integer() {5, 0, 0, 0})
+        Me.AutoPainterSharePercent.Name = "AutoPainterSharePercent"
+        Me.AutoPainterSharePercent.Size = New System.Drawing.Size(64, 26)
+        Me.AutoPainterSharePercent.TabIndex = 11
+        Me.AutoPainterSharePercent.Value = New Decimal(New Integer() {30, 0, 0, 0})
+        Me.AutoPainterSharePercent.Visible = False
+        '
+        'AutoPainterShareSuffix
+        '
+        Me.AutoPainterShareSuffix.AutoSize = True
+        Me.AutoPainterShareSuffix.Location = New System.Drawing.Point(176, 198)
+        Me.AutoPainterShareSuffix.Name = "AutoPainterShareSuffix"
+        Me.AutoPainterShareSuffix.Size = New System.Drawing.Size(201, 20)
+        Me.AutoPainterShareSuffix.TabIndex = 12
+        Me.AutoPainterShareSuffix.Text = "% of detailed textures to Painter"
+        Me.AutoPainterShareSuffix.Visible = False
         '
         'PyCPU
         '
@@ -1545,6 +1584,7 @@ Partial Class Form1
         Me.PyGroup.ResumeLayout(False)
         Me.PyGroup.PerformLayout()
         CType(Me.PyTileSize, System.ComponentModel.ISupportInitialize).EndInit()
+        CType(Me.AutoPainterSharePercent, System.ComponentModel.ISupportInitialize).EndInit()
         Me.ChainGroup.ResumeLayout(False)
         CType(Me.ChainPreview, System.ComponentModel.ISupportInitialize).EndInit()
         Me.ChainContext.ResumeLayout(False)
@@ -1681,6 +1721,9 @@ Partial Class Form1
     Friend WithEvents SpandrelModelInfoLabel As Label
     Friend WithEvents SpandrelScanStatusLabel As Label
     Friend WithEvents RefreshSpandrelModelsButton As Button
+    Friend WithEvents AutoPainterShareLabel As Label
+    Friend WithEvents AutoPainterSharePercent As NumericUpDown
+    Friend WithEvents AutoPainterShareSuffix As Label
     Friend WithEvents HotKeyCheckbox As CheckBox
     Friend WithEvents AlphaComboBox As ComboBox
 End Class

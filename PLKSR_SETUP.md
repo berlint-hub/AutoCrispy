@@ -30,6 +30,20 @@ The **Spandrel** selector uses the same `models` folder. It checks `.pth`, `.pt`
 
 For example, [4× GameAI 2.0](https://openmodeldb.info/models/4x-GameAI-2-0) is a 4× RGB ESRGAN checkpoint. [1× DXTDecompressor Source V3](https://openmodeldb.info/models/1x-DXTDecompressor-Source-V3) is a 1× RGB ESRGAN model for removing DXT1 compression artifacts; it preserves image dimensions rather than enlarging them. Put either `.pth` file in `models`; if Spandrel recognizes the checkpoint, it appears in the same selector. For DDS textures, use TexConv to convert to PNG before the Spandrel stage and convert back to DDS afterward.
 
+## Automatic Architect/Painter routing
+
+The optional [NPPE3 Super Resolution ensemble](https://huggingface.co/divyanshgitmax/NPPE3-SuperResolution-Ensemble) describes `best_realesrnet.pth` as **Architect** (geometric edges) and `best_swinir.pth` as **Painter** (detailed/repeating textures). To make AutoCrispy offer its experimental per-texture router, place both Spandrel-compatible 4× RGB checkpoints in the shared `models` folder, keeping those exact filenames:
+
+```text
+models/
+  best_realesrnet.pth
+  best_swinir.pth
+```
+
+After refreshing the model scan, select **Auto texture routing · Architect / Painter** in the Spandrel model list. The default routes **up to 30%** of sufficiently detailed textures to Painter and the rest to Architect; adjust the Painter share before adding the step to the chain. For a dump of 5,000 eligible textures, that means at most about 1,500 Painter selections. The router scores the whole pending batch, then processes the Architect group first and the Painter selections second, all in one run; you do not need to run the dump twice. Batches under 10 images use an absolute feature threshold instead of a percentage, avoiding arbitrary splits for one-off/watch-mode images.
+
+This is an experimental image-statistics heuristic, not a trained semantic classifier: it considers fine detail, edge density/direction, local-pattern diversity, and repetition, but cannot reliably know that a texture depicts grass, skin, stone, or brick. It can route a texture differently than expected; enable debug logging to inspect the scores. Each image is processed by one model (the models' predictions are **not** blended), so this is not the 75/25 full-image ensemble described by the model card. The automatic choice appears only when both exact-name files are recognized by Spandrel as compatible 4× RGB models. Model weights are not included in AutoCrispy.
+
 ## 2. Install the inference runtime
 
 Install **Python 3.10 or newer**. The selected Python must be on `PATH`, or `python.exe` must be beside AutoCrispy (or in a `python/` subfolder). If it is installed elsewhere, set the `AUTOCRISPY_PYTHON` environment variable to the full path to `python.exe`.
@@ -37,7 +51,7 @@ Install **Python 3.10 or newer**. The selected Python must be on `PATH`, or `pyt
 Install a PyTorch build appropriate for the computer. For NVIDIA GPU acceleration, first use the official [PyTorch install selector](https://pytorch.org/get-started/locally/) to install the CUDA-enabled build. Then, in that same Python environment, run:
 
 ```bat
-python -m pip install "spandrel==0.4.2" Pillow
+python -m pip install "spandrel==0.4.2" Pillow numpy
 ```
 
 Spandrel 0.4.2 detects RealPLKSR-DySample, DAT architectures, ESRGAN models, and other supported architectures. AutoCrispy accepts 1× RGB models marked as Restoration and 4× RGB models marked as SR; it validates purpose and channels before inference. If CUDA is unavailable, it falls back to CPU; CPU processing will be much slower. The generic selector validates candidate files on startup, so checking a folder containing many large checkpoints can take a little time.
@@ -45,7 +59,7 @@ Spandrel 0.4.2 detects RealPLKSR-DySample, DAT architectures, ESRGAN models, and
 ## 3. Use a Spandrel model
 
 1. Start AutoCrispy. The **Spandrel** backend appears when at least one eligible checkpoint is found in `models` (or the legacy `Spandrel` folder).
-2. Choose a model from the selector, then add it from the chain tab if needed. PLKSR V3 is selected by default when installed; otherwise DAT2 V4 is preferred, then the first eligible model.
+2. Choose a model from the selector, then add it from the chain tab if needed. PLKSR V3 is selected by default when installed; otherwise DAT2 V4 is preferred, then the Architect/Painter router when its pair is available, then the first eligible model.
 3. Start the watcher as usual. The helper loads the selected checkpoint once per batch, then processes new textures.
 
 A saved chain entry using the exact legacy model `4x_gameai_2.0` is upgraded to PLKSR V3 when that checkpoint is recognized, or DAT2 V4 otherwise if recognized. If neither is installed, the saved ESRGAN entry is left unchanged; other ESRGAN chains are also left alone.

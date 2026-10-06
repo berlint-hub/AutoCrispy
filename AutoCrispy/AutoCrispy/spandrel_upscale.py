@@ -1,8 +1,9 @@
 """Folder-based Spandrel inference bridge for AutoCrispy.
 
 Loads a PLKSR/DAT2 checkpoint or a Spandrel-recognized generic checkpoint,
-then processes supported files in one input directory. The selected model is
-kept resident for the whole batch.
+then processes supported files in one input directory. An optional experimental
+feature router can dispatch images between Architect and Painter checkpoints.
+The selected model or model pair remains resident for the batch.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from __future__ import annotations
 import argparse
 import base64
 import gc
+import math
 import sys
 import traceback
 from pathlib import Path
@@ -36,6 +38,8 @@ MODEL_SCALE = 4
 SUPPORTED_GENERIC_SCALES = {1, MODEL_SCALE}
 TILE_OVERLAP = 32
 MODEL_FILE_EXTENSIONS = {".pth", ".pt", ".ckpt", ".safetensors"}
+AUTO_ROUTE_MIN_PAINTER_SCORE = 0.34
+AUTO_ROUTE_MIN_RATIO_BATCH = 10
 
 
 def _has_supported_generic_purpose(descriptor: Any) -> bool:
@@ -57,6 +61,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "model", type=Path, nargs="?", help="PyTorch checkpoint to run"
     )
+    parser.add_argument(
+        "--auto-route",
+        action="store_true",
+        help="Route each texture to an Architect or Painter model using image features",
+    )
+    parser.add_argument("--architect-model", type=Path, help="4x Architect checkpoint for auto routing")
+    parser.add_argument("--painter-model", type=Path, help="4x Painter checkpoint for auto routing")
+    parser.add_argument(
+        "--painter-share",
+        type=int,
+        default=30,
+        help="Maximum Painter share for batches of 10+ images (default: 30 percent)",
+    )
     parser.add_argument("--input", type=Path, help="Input folder")
     parser.add_argument("--output", type=Path, help="Output folder")
     parser.add_argument(
@@ -77,8 +94,18 @@ def parse_args() -> argparse.Namespace:
         "--debug", action="store_true", help="Print a full traceback on errors"
     )
     args = parser.parse_args()
-    if args.list_models is None and (args.model is None or args.input is None or args.output is None):
-        parser.error("model, --input, and --output are required unless --list-models is used")
+    if args.list_models is None:
+        if args.input is None or args.output is None:
+            parser.error("--input and --output are required unless --list-models is used")
+        if args.auto_route:
+            if args.model is not None:
+                parser.error("Do not pass a single model together with --auto-route")
+            if args.architect_model is None or args.painter_model is None:
+                parser.error("--auto-route requires both --architect-model and --painter-model")
+            if not 0 <= args.painter_share <= 100:
+                parser.error("--painter-share must be between 0 and 100")
+        elif args.model is None:
+            parser.error("A checkpoint is required unless --auto-route or --list-models is used")
     return args
 
 
@@ -321,6 +348,242 @@ def _process_image(
     result.save(output_path, **save_options)
 
 
+def _pearson_correlation(left: Any, right: Any) -> float:
+    import numpy as np
+
+    left = np.asarray(left, dtype=np.float32).ravel()
+    right = np.asarray(right, dtype=np.float32).ravel()
+    if left.size < 4 or left.size != right.size:
+        return 0.0
+    left = left - float(left.mean())
+    right = right - float(right.mean())
+    denominator = float(np.sqrt(np.sum(left * left) * np.sum(right * right)))
+    if denominator <= 1e-8:
+        return 0.0
+    return float(np.sum(left * right) / denominator)
+
+
+def _texture_features(input_path: Path) -> dict[str, float]:
+    """Estimate fine texture and repetition without a separate ML model.
+
+    The feature score is a routing heuristic, not semantic recognition: it cannot
+    reliably identify objects such as grass, skin, stone, or brick by name.
+    """
+    import numpy as np
+    from PIL import Image, ImageFilter, ImageOps
+
+    with Image.open(input_path) as source:
+        source.load()
+        gray_image = ImageOps.exif_transpose(source).convert("L")
+        resampling = getattr(Image, "Resampling", Image).BILINEAR
+        gray_image.thumbnail((96, 96), resampling)
+        gray = np.asarray(gray_image, dtype=np.float32) / 255.0
+        blurred = np.asarray(
+            gray_image.filter(ImageFilter.GaussianBlur(radius=1.0)), dtype=np.float32
+        ) / 255.0
+
+    height, width = gray.shape
+    if height < 3 or width < 3:
+        return {
+            "score": 0.0,
+            "detail": 0.0,
+            "edge_density": 0.0,
+            "orientation_entropy": 0.0,
+            "local_pattern_entropy": 0.0,
+            "periodicity": 0.0,
+        }
+
+    high_pass = gray - blurred
+    detail = min(1.0, float(np.mean(np.abs(high_pass))) / 0.12)
+
+    # Local binary-pattern entropy estimates how varied the tiny neighborhoods
+    # are. Uniformly repeating geometric cells tend to have fewer patterns than
+    # natural, fine-grained surfaces, without needing a semantic classifier.
+    pattern_codes = np.zeros((height - 2, width - 2), dtype=np.uint8)
+    center = gray[1:-1, 1:-1]
+    neighbors = ((-1, -1), (-1, 0), (-1, 1), (0, 1), (1, 1), (1, 0), (1, -1), (0, -1))
+    for bit, (offset_y, offset_x) in enumerate(neighbors):
+        neighbor = gray[1 + offset_y : height - 1 + offset_y, 1 + offset_x : width - 1 + offset_x]
+        pattern_codes |= (neighbor >= center).astype(np.uint8) << bit
+    pattern_histogram = np.bincount(pattern_codes.ravel(), minlength=256).astype(np.float32)
+    pattern_probabilities = pattern_histogram / float(pattern_histogram.sum())
+    pattern_probabilities = pattern_probabilities[pattern_probabilities > 0]
+    local_pattern_entropy = float(
+        -np.sum(pattern_probabilities * np.log(pattern_probabilities)) / np.log(256.0)
+    )
+
+    gradient_x = gray[1:, 1:] - gray[1:, :-1]
+    gradient_y = gray[1:, 1:] - gray[:-1, 1:]
+    magnitude = np.hypot(gradient_x, gradient_y)
+    edge_mask = magnitude >= 0.045
+    edge_density = float(np.mean(edge_mask))
+
+    orientation_entropy = 0.0
+    if bool(np.any(edge_mask)):
+        angles = np.mod(np.arctan2(gradient_y[edge_mask], gradient_x[edge_mask]), np.pi)
+        orientation_histogram, _ = np.histogram(angles, bins=8, range=(0.0, np.pi))
+        histogram_sum = int(orientation_histogram.sum())
+        if histogram_sum > 0:
+            probabilities = orientation_histogram.astype(np.float32) / histogram_sum
+            probabilities = probabilities[probabilities > 0]
+            orientation_entropy = float(
+                -np.sum(probabilities * np.log(probabilities)) / np.log(8.0)
+            )
+
+    periodicity = 0.0
+    for shift in (2, 3, 4, 6, 8, 12, 16, 20, 24):
+        if width > shift * 2:
+            periodicity = max(
+                periodicity,
+                _pearson_correlation(high_pass[:, :-shift], high_pass[:, shift:]),
+            )
+        if height > shift * 2:
+            periodicity = max(
+                periodicity,
+                _pearson_correlation(high_pass[:-shift, :], high_pass[shift:, :]),
+            )
+    periodicity = max(0.0, min(1.0, periodicity))
+
+    detail_score = min(1.0, detail)
+    edge_score = min(1.0, edge_density / 0.35)
+    # Natural local-pattern diversity and mixed edge directions favor Painter.
+    # Highly regular geometric contours still influence the score through edges
+    # and periodicity, but repeatedness is only a small boost on diverse detail.
+    painter_score = (
+        0.08 * detail_score
+        + 0.05 * edge_score
+        + 0.15 * orientation_entropy
+        + 0.60 * local_pattern_entropy
+        + 0.12 * periodicity * local_pattern_entropy
+    )
+    return {
+        "score": max(0.0, min(1.0, painter_score)),
+        "detail": detail_score,
+        "edge_density": edge_density,
+        "orientation_entropy": orientation_entropy,
+        "local_pattern_entropy": local_pattern_entropy,
+        "periodicity": periodicity,
+    }
+
+
+def _select_painter_files(
+    scored_files: list[tuple[Path, dict[str, float]]], painter_share: int
+) -> set[Path]:
+    """Select high-texture images, capped at the requested share for large batches."""
+    if not 0 <= painter_share <= 100:
+        raise ValueError("Painter share must be between 0 and 100 percent.")
+    eligible = [
+        (path, features)
+        for path, features in scored_files
+        if features["score"] >= AUTO_ROUTE_MIN_PAINTER_SCORE
+    ]
+    if not eligible or painter_share == 0:
+        return set()
+
+    if len(scored_files) < AUTO_ROUTE_MIN_RATIO_BATCH:
+        # A percentage is unstable for a single new/watch-mode texture. Use the
+        # absolute feature threshold until there is enough context for ranking.
+        return {path for path, _ in eligible}
+
+    target_count = int(math.floor(len(scored_files) * painter_share / 100.0 + 0.5))
+    ranked = sorted(
+        eligible,
+        key=lambda item: (
+            -item[1]["score"],
+            item[0].name.casefold(),
+            str(item[0]).casefold(),
+        ),
+    )
+    return {path for path, _ in ranked[:target_count]}
+
+
+def _run_auto_route(args: argparse.Namespace) -> int:
+    if not args.input.is_dir():
+        raise NotADirectoryError(f"Input folder not found: {args.input}")
+    args.output.mkdir(parents=True, exist_ok=True)
+    if args.architect_model.resolve() == args.painter_model.resolve():
+        raise ValueError("Architect and Painter must be different checkpoints.")
+
+    architect, architect_device, architect_dtype, architect_device_name = _load_model(
+        args.architect_model, args.cpu, generic_model=True
+    )
+    painter, painter_device, painter_dtype, painter_device_name = _load_model(
+        args.painter_model, args.cpu, generic_model=True
+    )
+    if architect.scale != MODEL_SCALE or painter.scale != MODEL_SCALE:
+        raise ValueError("Automatic Architect/Painter routing requires two 4x RGB models.")
+    if architect.scale != painter.scale:
+        raise ValueError("Architect and Painter checkpoints must use the same scale.")
+
+    files = sorted(
+        path
+        for path in args.input.iterdir()
+        if path.is_file() and path.suffix.casefold() in SUPPORTED_EXTENSIONS
+    )
+    if not files:
+        print("Auto routing found no supported images.")
+        return 0
+
+    scored_files: list[tuple[Path, dict[str, float]]] = []
+    report_interval = max(1, len(files) // 100)
+    for index, input_path in enumerate(files, start=1):
+        if index == 1 or index % report_interval == 0 or index == len(files):
+            print(
+                f"AUTOCRISPY_PROGRESS: {index}/{len(files)} · Analyzing texture · {input_path.name}",
+                flush=True,
+            )
+        scored_files.append((input_path, _texture_features(input_path)))
+    painter_files = _select_painter_files(scored_files, args.painter_share)
+    architect_count = len(files) - len(painter_files)
+    print(
+        f"Auto routing: {architect_count} Architect, {len(painter_files)} Painter "
+        f"(Painter cap {args.painter_share}%; feature-based, not semantic).",
+        flush=True,
+    )
+    print(
+        f"Loaded Architect {args.architect_model.name} and Painter {args.painter_model.name} "
+        f"on {architect_device_name}/{painter_device_name}.",
+        flush=True,
+    )
+
+    routed_files = sorted(
+        scored_files,
+        key=lambda item: (item[0] in painter_files, item[0].name.casefold()),
+    )
+    for index, (input_path, features) in enumerate(routed_files, start=1):
+        use_painter = input_path in painter_files
+        model, device, dtype, role = (
+            (painter, painter_device, painter_dtype, "Painter")
+            if use_painter
+            else (architect, architect_device, architect_dtype, "Architect")
+        )
+        print(
+            f"AUTOCRISPY_PROGRESS: {index}/{len(files)} · {role} · {input_path.name}",
+            flush=True,
+        )
+        if args.debug:
+            print(
+                f"Route detail: {input_path.name} -> {role}; "
+                f"score={features['score']:.3f}, detail={features['detail']:.3f}, "
+                f"edges={features['edge_density']:.3f}, "
+                f"directions={features['orientation_entropy']:.3f}, "
+                f"local-patterns={features['local_pattern_entropy']:.3f}, "
+                f"repetition={features['periodicity']:.3f}",
+                flush=True,
+            )
+        _process_image(
+            input_path,
+            args.output / input_path.name,
+            model,
+            device,
+            dtype,
+            args.tile_size,
+        )
+
+    print(f"Auto-routed and upscaled {len(files)} image(s).", flush=True)
+    return 0
+
+
 def list_supported_models(model_root: Path, debug: bool = False) -> int:
     if not model_root.is_dir():
         raise NotADirectoryError(f"Model folder not found: {model_root}")
@@ -396,6 +659,8 @@ def list_supported_models(model_root: Path, debug: bool = False) -> int:
 
 
 def run(args: argparse.Namespace) -> int:
+    if args.auto_route:
+        return _run_auto_route(args)
     if args.model is None or args.input is None or args.output is None:
         raise ValueError("A checkpoint, input folder, and output folder are required.")
     if not args.input.is_dir():

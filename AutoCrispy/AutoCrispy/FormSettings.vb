@@ -50,6 +50,9 @@
         'Load ESRGAN Settings
         Source.PyTileSize.Value = LoadedSettings.PythonPak.TileSize
         Source.PyCPU.Checked = LoadedSettings.PythonPak.CPUOnly
+        Dim SavedPainterShare As Integer = LoadedSettings.PythonPak.PainterShare
+        If SavedPainterShare < 10 OrElse SavedPainterShare > 90 Then SavedPainterShare = 30
+        Source.AutoPainterSharePercent.Value = SavedPainterShare
 
         'Load UI Paths
         Source.InputTextBox.Text = LoadedSettings.Paths.InputPath
@@ -135,7 +138,7 @@
             AnimePak = New Anime4kPackage(Source.AnimeCPPScale.Value, Source.AnimeCppPre.Checked, Source.AnimeCppPost.Checked, Source.AnimeCppPreFilter.Checked, Source.AnimeCppPostFilter.Checked, GetFilters(Source.AnimeCppPreFilters), GetFilters(Source.AnimeCppPostFilters), Source.AnimeCPPGpu.Checked, Source.AnimeCPPCnn.Checked)
             TexConvPak = New DDxPackage(Source.DDxModeBox.SelectedItem, Source.DDxFormatLabel.Text.Replace("Format: ", ""), Source.DDxConvFormat.SelectedItem, Source.FlComboBox.SelectedItem, Source.Dx9CheckBox.Checked, Source.Dx10Checkbox.Checked, Source.SepAlphaCheckBox.Checked, Source.PmAlphaCheckBox.Checked, Source.AlphaCheckBox.Checked)
             xBRZPak = New xBRZPackage(Source.xBRZScale.Value)
-            PythonPak = New PythonPackage(Source.GetSelectedUpscaleModel(), Source.PyTileSize.Value, Source.PyCPU.Checked)
+            PythonPak = Source.GetSelectedPythonPackage()
             Paths = New ProgramPaths(Source.InputTextBox.Text, Source.OutputTextBox.Text, Source.ExeTextBox.Text)
             BasicSettings = New ProgramSettings(Source.ExeComboBox.SelectedItem, Source.ThreadComboBox.SelectedIndex, Source.NumericThreads.Value, Source.DefringeCheck.Checked, Source.PS2Check.Checked, Source.DefringeThresh.Value, Source.TabGroup.SelectedIndex)
             ExpertSettings = New AdvancedSettings(Source.DebugCheckbox.Checked, Source.ExpertSettingsBox.Text, Source.CleanupCheckBox.Checked, Source.SeamsBox.SelectedIndex, Source.SeamScale.Value, Source.SeamMargin.Value, Source.AlphaComboBox.SelectedIndex, Source.HotKeyCheckbox.Checked, Source.PortableCheckBox.Checked)
@@ -246,7 +249,7 @@
                 Case "DAT2"
                     Package = New PythonPackage(Source.GetSelectedUpscaleModel(), Source.PyTileSize.Value, Source.PyCPU.Checked, True)
                 Case "Spandrel"
-                    Package = New PythonPackage(Source.GetSelectedUpscaleModel(), Source.PyTileSize.Value, Source.PyCPU.Checked, True)
+                    Package = Source.GetSelectedPythonPackage()
             End Select
         End Sub
     End Structure
@@ -373,11 +376,21 @@
         Public Property Model As String
         Public Property TileSize As Integer
         Public Property CPUOnly As Boolean
+        Public Property AutoRouteEnabled As Boolean
+        Public Property ArchitectModel As String
+        Public Property PainterModel As String
+        Public Property PainterShare As Integer
         Public Property FileTypes As List(Of String)
-        Public Sub New(_Model As String, _TileSize As Integer, _CPUOnly As Boolean, Optional _UseSpandrelFormats As Boolean = False)
+        Public Sub New(_Model As String, _TileSize As Integer, _CPUOnly As Boolean, Optional _UseSpandrelFormats As Boolean = False,
+                       Optional _AutoRouteEnabled As Boolean = False, Optional _ArchitectModel As String = "",
+                       Optional _PainterModel As String = "", Optional _PainterShare As Integer = 30)
             Model = _Model
             TileSize = _TileSize
             CPUOnly = _CPUOnly
+            AutoRouteEnabled = _AutoRouteEnabled
+            ArchitectModel = _ArchitectModel
+            PainterModel = _PainterModel
+            PainterShare = _PainterShare
             If _UseSpandrelFormats Then
                 FileTypes = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp", ".tga"}.ToList
             Else

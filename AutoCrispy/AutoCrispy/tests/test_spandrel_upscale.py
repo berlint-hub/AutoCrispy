@@ -215,6 +215,66 @@ class SpandrelRunnerTests(unittest.TestCase):
             self.assertIsNone(args.input)
             self.assertIsNone(args.output)
 
+    def test_auto_route_cli_accepts_two_models_without_a_single_model_argument(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with patch.object(
+                sys,
+                "argv",
+                [
+                    "spandrel_upscale.py",
+                    "--auto-route",
+                    "--architect-model",
+                    str(root / "best_realesrnet.pth"),
+                    "--painter-model",
+                    str(root / "best_swinir.pth"),
+                    "--input",
+                    str(root / "input"),
+                    "--output",
+                    str(root / "output"),
+                ],
+            ):
+                args = runner.parse_args()
+            self.assertTrue(args.auto_route)
+            self.assertIsNone(args.model)
+            self.assertEqual(args.painter_share, 30)
+            self.assertEqual(args.architect_model.name, "best_realesrnet.pth")
+            self.assertEqual(args.painter_model.name, "best_swinir.pth")
+
+    def test_auto_route_selection_caps_painter_share_and_uses_highest_texture_scores(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            scored = [
+                (root / f"texture-{index:02d}.png", {"score": score})
+                for index, score in enumerate((0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.20, 0.10, 0.05, 0.0))
+            ]
+            painter_files = runner._select_painter_files(scored, painter_share=30)
+            self.assertEqual(
+                painter_files,
+                {root / "texture-00.png", root / "texture-01.png", root / "texture-02.png"},
+            )
+
+    def test_auto_route_does_not_force_painter_when_no_texture_score_is_eligible(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            scored = [
+                (root / f"flat-{index:02d}.png", {"score": 0.1})
+                for index in range(10)
+            ]
+            self.assertEqual(runner._select_painter_files(scored, painter_share=30), set())
+
+    def test_auto_route_uses_absolute_texture_threshold_for_small_batches(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            scored = [
+                (root / "smooth.png", {"score": 0.20}),
+                (root / "grass-like.png", {"score": 0.80}),
+            ]
+            self.assertEqual(
+                runner._select_painter_files(scored, painter_share=30),
+                {root / "grass-like.png"},
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

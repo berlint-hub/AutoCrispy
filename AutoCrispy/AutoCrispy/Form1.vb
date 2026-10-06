@@ -41,6 +41,7 @@ Public Class Form1
     Private Const DAT2BackendName As String = "DAT2"
     Private Const DAT2CheckpointName As String = "4x-PBRify_UpscalerV4.pth"
     Private Const SpandrelBackendName As String = "Spandrel"
+    Private Const AutoTextureRouterToken As String = "__AUTO_TEXTURE_ROUTER__"
     Private Const GenericModelFolderName As String = "models"
     Private Const LegacySpandrelModelFolderName As String = "Spandrel"
     Private Const SpandrelRunnerName As String = "spandrel_upscale.py"
@@ -76,9 +77,13 @@ Public Class Form1
         Public Property Purpose As String
         Public Property InputChannels As Integer
         Public Property OutputChannels As Integer
+        Public Property IsAutoTextureRouter As Boolean
+        Public Property ArchitectModelPath As String
+        Public Property PainterModelPath As String
 
         Public ReadOnly Property SelectorText As String
             Get
+                If IsAutoTextureRouter Then Return "Auto texture routing · Architect / Painter"
                 If Scale <= 0 Then Return Path.GetFileName(FilePath) & " · Spandrel image model"
                 Return Scale.ToString() & "× " & Purpose & " · " & Path.GetFileName(FilePath) & " (" & Architecture & ")"
             End Get
@@ -305,9 +310,14 @@ Public Class Form1
                 ScanCancellation.Token)
             If ScanGeneration <> SpandrelScanGeneration OrElse ScanCancellation.IsCancellationRequested Then Return
 
+            Dim CompatibleModelCount As Integer = FoundModels.Count
             SupportedSpandrelModels = FoundModels
-            If SupportedSpandrelModels.Count > 0 Then
-                SetModelScanStatus("Found " & SupportedSpandrelModels.Count.ToString() & " compatible model(s).")
+            Dim AutoRouterChoice As SpandrelModelInfo = CreateAutoTextureRouterChoice(FoundModels)
+            If AutoRouterChoice IsNot Nothing Then SupportedSpandrelModels.Insert(0, AutoRouterChoice)
+            If CompatibleModelCount > 0 Then
+                Dim ScanSummary As String = "Found " & CompatibleModelCount.ToString() & " compatible model(s)."
+                If AutoRouterChoice IsNot Nothing Then ScanSummary &= " Auto Architect/Painter routing is available."
+                SetModelScanStatus(ScanSummary)
                 AddSpandrelBackends()
                 Dim CurrentBackend As String = If(ExeComboBox.SelectedItem, "").ToString()
                 If String.Equals(CurrentBackend, SelectedBackendBeforeScan, StringComparison.OrdinalIgnoreCase) Then
@@ -439,6 +449,34 @@ Public Class Form1
         Return Result
     End Function
 
+    Private Function CreateAutoTextureRouterChoice(Models As List(Of SpandrelModelInfo)) As SpandrelModelInfo
+        Dim ArchitectModel As SpandrelModelInfo = Nothing
+        Dim PainterModel As SpandrelModelInfo = Nothing
+        For Each Model As SpandrelModelInfo In Models
+            If Model.Scale <> 4 OrElse String.IsNullOrWhiteSpace(Model.FilePath) Then Continue For
+            Dim ModelStem As String = Path.GetFileNameWithoutExtension(Model.FilePath)
+            If ModelStem.Equals("best_realesrnet", StringComparison.OrdinalIgnoreCase) OrElse
+                ModelStem.Equals("architect", StringComparison.OrdinalIgnoreCase) Then
+                If ArchitectModel Is Nothing Then ArchitectModel = Model
+            ElseIf ModelStem.Equals("best_swinir", StringComparison.OrdinalIgnoreCase) OrElse
+                ModelStem.Equals("painter", StringComparison.OrdinalIgnoreCase) Then
+                If PainterModel Is Nothing Then PainterModel = Model
+            End If
+        Next
+        If ArchitectModel Is Nothing OrElse PainterModel Is Nothing Then Return Nothing
+        Return New SpandrelModelInfo With {
+            .FilePath = AutoTextureRouterToken,
+            .Architecture = "Automatic texture router",
+            .Scale = 4,
+            .Purpose = "SR",
+            .InputChannels = 3,
+            .OutputChannels = 3,
+            .IsAutoTextureRouter = True,
+            .ArchitectModelPath = ArchitectModel.FilePath,
+            .PainterModelPath = PainterModel.FilePath
+        }
+    End Function
+
     Private Function FindSpandrelModel(SearchRoot As String, CheckpointName As String) As String
         If Not Directory.Exists(SearchRoot) Then Return ""
 
@@ -482,11 +520,17 @@ Public Class Form1
             End If
         Next
         For i As Integer = 0 To SupportedSpandrelModels.Count - 1
-            If Path.GetFileName(SupportedSpandrelModels(i).FilePath).Equals(DAT2CheckpointName, StringComparison.OrdinalIgnoreCase) Then
+            If Not SupportedSpandrelModels(i).IsAutoTextureRouter AndAlso
+                Path.GetFileName(SupportedSpandrelModels(i).FilePath).Equals(DAT2CheckpointName, StringComparison.OrdinalIgnoreCase) Then
                 Return i
             End If
         Next
-        If SupportedSpandrelModels.Count > 0 Then Return 0
+        For i As Integer = 0 To SupportedSpandrelModels.Count - 1
+            If SupportedSpandrelModels(i).IsAutoTextureRouter Then Return i
+        Next
+        For i As Integer = 0 To SupportedSpandrelModels.Count - 1
+            If Not SupportedSpandrelModels(i).IsAutoTextureRouter Then Return i
+        Next
         Return -1
     End Function
 
@@ -851,15 +895,32 @@ Public Class Form1
         SpandrelModelInfoLabel.Visible = IsSpandrelSelected
         SpandrelScanStatusLabel.Visible = IsSpandrelSelected
         RefreshSpandrelModelsButton.Visible = IsSpandrelSelected
+        AutoPainterShareLabel.Visible = False
+        AutoPainterSharePercent.Visible = False
+        AutoPainterShareSuffix.Visible = False
         If Not IsSpandrelSelected Then Return
 
         If PyModel.SelectedIndex < 0 OrElse PyModel.SelectedIndex >= SupportedSpandrelModels.Count Then
             SpandrelModelInfoLabel.Text = "No compatible model is selected. Refresh the scan or check your setup."
             UiToolTip.SetToolTip(SpandrelModelInfoLabel, "")
+            AutoPainterShareLabel.Visible = False
+            AutoPainterSharePercent.Visible = False
+            AutoPainterShareSuffix.Visible = False
             Return
         End If
 
         Dim Model As SpandrelModelInfo = SupportedSpandrelModels(PyModel.SelectedIndex)
+        AutoPainterShareLabel.Visible = Model.IsAutoTextureRouter
+        AutoPainterSharePercent.Visible = Model.IsAutoTextureRouter
+        AutoPainterShareSuffix.Visible = Model.IsAutoTextureRouter
+        If Model.IsAutoTextureRouter Then
+            SpandrelModelInfoLabel.Text = "Experimental auto-routing: up to " & CInt(AutoPainterSharePercent.Value).ToString() & "% Painter for detailed/repeating textures; the rest use Architect."
+            Dim RouterTooltip As String = "Feature-based routing (not semantic object recognition). Architect: " & Model.ArchitectModelPath &
+                Environment.NewLine & "Painter: " & Model.PainterModelPath
+            UiToolTip.SetToolTip(SpandrelModelInfoLabel, RouterTooltip)
+            UiToolTip.SetToolTip(PyModel, RouterTooltip)
+            Return
+        End If
         If Model.Scale > 0 Then
             Dim ScaleDescription As String = If(Model.Scale = 1, "preserves image dimensions", "enlarges " & Model.Scale.ToString() & "×")
             SpandrelModelInfoLabel.Text = "Architecture: " & Model.Architecture & " · " & Model.Scale.ToString() & "× " & Model.Purpose &
@@ -879,6 +940,10 @@ Public Class Form1
         UpdateSpandrelModelInfo()
     End Sub
 
+    Private Sub AutoPainterSharePercent_ValueChanged(sender As Object, e As EventArgs) Handles AutoPainterSharePercent.ValueChanged
+        UpdateSpandrelModelInfo()
+    End Sub
+
     Private Async Sub RefreshSpandrelModelsButton_Click(sender As Object, e As EventArgs) Handles RefreshSpandrelModelsButton.Click
         Await RefreshSupportedSpandrelModels(Root)
     End Sub
@@ -886,12 +951,27 @@ Public Class Form1
     Public Function GetSelectedUpscaleModel() As String
         Dim BackendName As String = If(ExeComboBox.SelectedItem, "").ToString()
         If BackendName = PLKSRBackendName OrElse BackendName = DAT2BackendName OrElse BackendName = SpandrelBackendName Then
+            If BackendName = SpandrelBackendName AndAlso PyModel.SelectedIndex >= 0 AndAlso PyModel.SelectedIndex < SupportedSpandrelModels.Count AndAlso
+                SupportedSpandrelModels(PyModel.SelectedIndex).IsAutoTextureRouter Then Return AutoTextureRouterToken
             Return GetSpandrelModelPath(BackendName)
         End If
         If PyModel.SelectedIndex >= 0 AndAlso PyModel.SelectedIndex < PyModels.Count Then
             Return PyModels(PyModel.SelectedIndex)
         End If
         Return ""
+    End Function
+
+    Public Function GetSelectedPythonPackage() As FormSettings.PythonPackage
+        Dim BackendName As String = If(ExeComboBox.SelectedItem, "").ToString()
+        Dim UseSpandrelFormats As Boolean = BackendName = PLKSRBackendName OrElse BackendName = DAT2BackendName OrElse BackendName = SpandrelBackendName
+        If BackendName = SpandrelBackendName AndAlso PyModel.SelectedIndex >= 0 AndAlso PyModel.SelectedIndex < SupportedSpandrelModels.Count Then
+            Dim Model As SpandrelModelInfo = SupportedSpandrelModels(PyModel.SelectedIndex)
+            If Model.IsAutoTextureRouter Then
+                Return New FormSettings.PythonPackage(AutoTextureRouterToken, CInt(PyTileSize.Value), PyCPU.Checked, True, True,
+                    Model.ArchitectModelPath, Model.PainterModelPath, CInt(AutoPainterSharePercent.Value))
+            End If
+        End If
+        Return New FormSettings.PythonPackage(GetSelectedUpscaleModel(), CInt(PyTileSize.Value), PyCPU.Checked, UseSpandrelFormats)
     End Function
 
     Sub MoveShowGroup(ByRef Source As GroupBox)
@@ -1067,6 +1147,8 @@ Public Class Form1
         End If
         ' CopyFiles advances this cursor, so the outer loop must not also add a batch step.
         Dim CurrentIndex As Integer = 0
+        Dim BatchLimit As Integer = ThreadCount
+        If HasAutoTextureRouterInChain() Then BatchLimit = Math.Max(BatchLimit, Source.Length)
         While CurrentIndex < Source.Count
             If WorkHorse.CancellationPending Then
                 CleanupUpscaleTemporaryFolders()
@@ -1082,7 +1164,7 @@ Public Class Form1
             Next
             ChainPaths.Add(LoadedSettings.Paths.OutputPath)
             Directory.CreateDirectory(TempPath)
-            CopyFiles(Source, SkipList, TempPath, CurrentIndex, ThreadCount)
+            CopyFiles(Source, SkipList, TempPath, CurrentIndex, BatchLimit)
             If WorkHorse.CancellationPending Then
                 CleanupUpscaleTemporaryFolders()
                 Return
@@ -1179,6 +1261,17 @@ Public Class Form1
 
 #Region "Upscale Subroutines"
 
+    Private Function HasAutoTextureRouterInChain() As Boolean
+        For Each ChainItem As FormSettings.ChainObject In ChainList
+            If ChainItem.PackageType = SpandrelBackendName AndAlso ChainItem.Package IsNot Nothing AndAlso
+                TypeOf ChainItem.Package Is FormSettings.PythonPackage Then
+                Dim PythonSettings As FormSettings.PythonPackage = CType(ChainItem.Package, FormSettings.PythonPackage)
+                If PythonSettings.AutoRouteEnabled Then Return True
+            End If
+        Next
+        Return False
+    End Function
+
     Private Sub CopyFiles(FileList As String(), ByRef SkipList As List(Of String), RootPath As String, ByRef CurrentIndex As Integer, BatchSize As Integer)
         Dim CopyCounter As Integer = 0
         Do While CurrentIndex < FileList.Count AndAlso CopyCounter < BatchSize AndAlso Not WorkHorse.CancellationPending
@@ -1239,7 +1332,7 @@ Public Class Form1
             RegisterActiveProcess(BatchProcess)
             Try
                 If IsSpandrelBackend Then
-                    Dim StandardOutputTask = BatchProcess.StandardOutput.ReadToEndAsync()
+                    Dim StandardOutputTask = Task.Run(Function() ReadSpandrelOutput(BatchProcess))
                     Dim StandardErrorTask = BatchProcess.StandardError.ReadToEndAsync()
                     WaitForActiveProcess(BatchProcess)
                     Dim StandardOutput As String = StandardOutputTask.Result
@@ -1320,6 +1413,22 @@ Public Class Form1
             File.Delete(TempImage)
         Next
     End Sub
+
+    Private Function ReadSpandrelOutput(SpandrelProcess As Process) As String
+        Dim CapturedOutput As New System.Text.StringBuilder()
+        Dim LastProgressUpdate As DateTime = DateTime.MinValue
+        While True
+            Dim OutputLine As String = SpandrelProcess.StandardOutput.ReadLine()
+            If OutputLine Is Nothing Then Exit While
+            CapturedOutput.AppendLine(OutputLine)
+            If OutputLine.StartsWith("AUTOCRISPY_PROGRESS:", StringComparison.Ordinal) AndAlso
+                (DateTime.UtcNow - LastProgressUpdate).TotalMilliseconds >= 500 Then
+                WorkHorse.ReportProgress(0, OutputLine.Substring("AUTOCRISPY_PROGRESS:".Length).Trim())
+                LastProgressUpdate = DateTime.UtcNow
+            End If
+        End While
+        Return CapturedOutput.ToString()
+    End Function
 
     Private Sub RegisterActiveProcess(ActiveProcess As Process)
         SyncLock ActiveProcessLock
@@ -1466,6 +1575,9 @@ Public Class Form1
                 ChainList.Add(New FormSettings.ChainObject("PBRify V4 DAT2 4x", 6, "", DAT2BackendName, Me))
             Case SpandrelBackendName
                 Dim ModelDisplayName As String = "Spandrel - " & Path.GetFileName(GetSelectedUpscaleModel())
+                If GetSelectedPythonPackage().AutoRouteEnabled Then
+                    ModelDisplayName = "Spandrel - Auto Architect/Painter (" & CInt(AutoPainterSharePercent.Value).ToString() & "% Painter)"
+                End If
                 ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, ModelDisplayName, ChainThumbs.Item(6)))
                 ChainList.Add(New FormSettings.ChainObject(ModelDisplayName, 6, "", SpandrelBackendName, Me))
         End Select
@@ -1576,7 +1688,16 @@ Public Class Form1
     Private Function MakeSpandrelCommand(SourceFolder As String, DestFolder As String, Package As FormSettings.PythonPackage, GenericModel As Boolean) As String
         Dim Result As New ArguementString
         Result.AddArguement(Quote(Path.Combine(Application.StartupPath, SpandrelRunnerName)))
-        Result.AddArguement(Quote(Package.Model))
+        If Package.AutoRouteEnabled Then
+            Result.AddArguement("--auto-route")
+            Result.AddArguement("--architect-model", Quote(Package.ArchitectModel))
+            Result.AddArguement("--painter-model", Quote(Package.PainterModel))
+            Dim PainterShare As Integer = Package.PainterShare
+            If PainterShare < 10 OrElse PainterShare > 90 Then PainterShare = 30
+            Result.AddArguement("--painter-share", PainterShare.ToString())
+        Else
+            Result.AddArguement(Quote(Package.Model))
+        End If
         Result.AddArguement("--input", Quote(SourceFolder))
         Result.AddArguement("--output", Quote(DestFolder))
         Result.AddArguement("--tile-size", Package.TileSize.ToString())
