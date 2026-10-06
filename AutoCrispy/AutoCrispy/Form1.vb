@@ -22,6 +22,7 @@ Public Class Form1
     Private WatchScanRunning As Boolean
     Private ProgressScanRunning As Boolean
     Private ChainScrollPanel As Panel
+    Private SpandrelModelPathLabel As Label
 
     Const HotToggle As String = "%`"
 
@@ -942,13 +943,22 @@ Public Class Form1
     Private Sub UpdateSpandrelModelInfo()
         Dim IsSpandrelSelected As Boolean = String.Equals(If(ExeComboBox.SelectedItem, "").ToString(), SpandrelBackendName, StringComparison.OrdinalIgnoreCase)
         SpandrelModelInfoLabel.Visible = IsSpandrelSelected
+        If SpandrelModelPathLabel IsNot Nothing Then SpandrelModelPathLabel.Visible = IsSpandrelSelected
         SpandrelScanStatusLabel.Visible = IsSpandrelSelected
         RefreshSpandrelModelsButton.Visible = IsSpandrelSelected
-        If Not IsSpandrelSelected Then Return
+        If Not IsSpandrelSelected Then
+            LayoutSpandrelDetails()
+            Return
+        End If
 
         If PyModel.SelectedIndex < 0 OrElse PyModel.SelectedIndex >= SupportedSpandrelModels.Count Then
             SetWrappedHint(SpandrelModelInfoLabel, "No compatible model is selected. Refresh the scan or check your setup.")
+            If SpandrelModelPathLabel IsNot Nothing Then
+                SpandrelModelPathLabel.Text = ""
+                UiToolTip.SetToolTip(SpandrelModelPathLabel, "")
+            End If
             UiToolTip.SetToolTip(PyModel, "")
+            LayoutSpandrelDetails()
             Return
         End If
 
@@ -961,8 +971,13 @@ Public Class Form1
         Else
             ModelSummary = "Architecture: " & Model.Architecture & " · Spandrel-compatible image model"
         End If
-        SetWrappedHint(SpandrelModelInfoLabel, ModelSummary & Environment.NewLine & Model.FilePath)
+        SetWrappedHint(SpandrelModelInfoLabel, ModelSummary)
+        If SpandrelModelPathLabel IsNot Nothing Then
+            SpandrelModelPathLabel.Text = FitPathText(Model.FilePath, SpandrelContentWidth() - 16, SpandrelModelPathLabel.Font)
+            UiToolTip.SetToolTip(SpandrelModelPathLabel, Model.FilePath)
+        End If
         UiToolTip.SetToolTip(PyModel, ModelSummary & Environment.NewLine & Model.FilePath)
+        LayoutSpandrelDetails()
     End Sub
 
     Private Sub PyModel_SelectedIndexChanged(sender As Object, e As EventArgs) Handles PyModel.SelectedIndexChanged
@@ -2050,8 +2065,27 @@ Public Class Form1
         ChainRemove.AccessibleDescription = "Remove the selected chain step."
         ChainRemove.Enabled = False
         SpandrelModelInfoLabel.UseMnemonic = False
+        SpandrelModelInfoLabel.AutoEllipsis = True
+        SpandrelModelInfoLabel.AutoSize = False
+        SpandrelModelInfoLabel.Location = New Point(9, 64)
+        SpandrelModelInfoLabel.Size = New Size(570, 20)
         TileSizeHint.UseMnemonic = False
         SpandrelScanStatusLabel.UseMnemonic = False
+        SpandrelModelPathLabel = New Label With {
+            .Name = "SpandrelModelPathLabel",
+            .AutoSize = False,
+            .AutoEllipsis = False,
+            .UseMnemonic = False,
+            .ForeColor = SystemColors.ControlText,
+            .BackColor = Color.Transparent,
+            .TextAlign = ContentAlignment.TopLeft,
+            .Location = New Point(9, 86),
+            .Size = New Size(570, 20),
+            .Visible = False,
+            .AccessibleName = "Model file path"
+        }
+        PyGroup.Controls.Add(SpandrelModelPathLabel)
+        SpandrelModelPathLabel.BringToFront()
 
         AlphaComboBox.Location = New Point(264, 86)
         AlphaComboBox.Size = New Size(150, AlphaComboBox.Height)
@@ -2108,6 +2142,111 @@ Public Class Form1
         Target.Text = Hint
         UiToolTip.SetToolTip(Target, Hint)
     End Sub
+
+    Private Function SpandrelContentWidth() As Integer
+        Dim LeftX As Integer = If(Label26 Is Nothing, 9, Label26.Left)
+        Return Math.Max(160, PyGroup.ClientSize.Width - LeftX - 12)
+    End Function
+
+    Private Function DesignScaleY() As Single
+        If Label26 Is Nothing OrElse Label26.Top <= 0 Then Return 1.0F
+        Return Label26.Top / 35.0F
+    End Function
+
+    Private Function ScaledDesignY(DesignY As Integer) As Integer
+        Return CInt(Math.Round(DesignY * DesignScaleY()))
+    End Function
+
+    Private Sub RestoreEsrganDetailRow()
+        Dim LeftX As Integer = If(Label26 Is Nothing, ScaledDesignY(9), Label26.Left)
+        Label25.Location = New Point(LeftX, ScaledDesignY(143))
+        PyTileSize.Location = New Point(PyTileSize.Left, ScaledDesignY(139))
+        PyCPU.Location = New Point(PyCPU.Left, ScaledDesignY(142))
+        TileSizeHint.SetBounds(LeftX, ScaledDesignY(177), SpandrelContentWidth(), Math.Max(28, ScaledDesignY(36)))
+    End Sub
+
+    Private Sub LayoutSpandrelDetails()
+        Dim LeftX As Integer = If(Label26 Is Nothing, 9, Label26.Left)
+        Dim ContentWidth As Integer = SpandrelContentWidth()
+        Dim LineHeight As Integer = Math.Max(18, SpandrelModelInfoLabel.Font.Height + 6)
+        Dim ShowPath As Boolean = SpandrelModelPathLabel IsNot Nothing AndAlso SpandrelModelPathLabel.Visible AndAlso SpandrelModelPathLabel.Text <> ""
+        Dim ShowStatus As Boolean = SpandrelScanStatusLabel.Visible
+
+        If Not ShowPath AndAlso Not ShowStatus Then
+            SpandrelModelInfoLabel.SetBounds(LeftX, PyModel.Bottom + 6, ContentWidth, LineHeight)
+            RestoreEsrganDetailRow()
+            Return
+        End If
+
+        Dim NextY As Integer = PyModel.Bottom + Math.Max(4, LineHeight \ 5)
+        SpandrelModelInfoLabel.SetBounds(LeftX, NextY, ContentWidth, LineHeight)
+        NextY += LineHeight + 2
+        If ShowPath Then
+            Dim PathLines As Integer = If(SpandrelModelPathLabel.Text.Contains(Environment.NewLine), 2, 1)
+            Dim PathHeight As Integer = Math.Max(LineHeight * PathLines, MeasureTextSize(SpandrelModelPathLabel.Text, SpandrelModelPathLabel.Font, ContentWidth).Height + 4)
+            SpandrelModelPathLabel.SetBounds(LeftX, NextY, ContentWidth, PathHeight)
+            SpandrelModelPathLabel.BringToFront()
+            NextY += PathHeight + 2
+        End If
+        If ShowStatus Then
+            SpandrelScanStatusLabel.SetBounds(LeftX, NextY, ContentWidth, LineHeight)
+            NextY += LineHeight + 8
+        Else
+            NextY += 6
+        End If
+        Label25.Location = New Point(LeftX, NextY + 4)
+        PyTileSize.Location = New Point(PyTileSize.Left, NextY)
+        PyCPU.Location = New Point(PyCPU.Left, NextY + 3)
+        TileSizeHint.SetBounds(LeftX, NextY + PyTileSize.Height + 8, ContentWidth, LineHeight * 2)
+        Dim BottomLimit As Integer = PyGroup.ClientSize.Height - 8
+        If TileSizeHint.Bottom > BottomLimit AndAlso TileSizeHint.Top < BottomLimit Then
+            TileSizeHint.Height = Math.Max(LineHeight, BottomLimit - TileSizeHint.Top)
+        End If
+    End Sub
+
+    Private Function FitPathText(FullPath As String, MaxWidth As Integer, PathFont As Font) As String
+        If String.IsNullOrEmpty(FullPath) Then Return ""
+        If MaxWidth < 40 Then MaxWidth = 560
+        If MeasureTextWidth(FullPath, PathFont) <= MaxWidth Then Return FullPath
+
+        Dim BestSplit As Integer = -1
+        For Index As Integer = 1 To FullPath.Length - 1
+            If FullPath(Index) <> "\"c AndAlso FullPath(Index) <> "/"c Then Continue For
+            Dim Head As String = FullPath.Substring(0, Index + 1)
+            If MeasureTextWidth(Head, PathFont) <= MaxWidth Then BestSplit = Index + 1
+        Next
+        If BestSplit > 0 Then
+            Dim Tail As String = FullPath.Substring(BestSplit)
+            If MeasureTextWidth(Tail, PathFont) > MaxWidth Then Tail = MiddleEllipsis(Tail, PathFont, MaxWidth)
+            Return FullPath.Substring(0, BestSplit) & Environment.NewLine & Tail
+        End If
+        Return MiddleEllipsis(FullPath, PathFont, MaxWidth)
+    End Function
+
+    Private Function MeasureTextWidth(Value As String, TextFont As Font) As Integer
+        Return MeasureTextSize(Value, TextFont, Integer.MaxValue).Width
+    End Function
+
+    Private Function MeasureTextSize(Value As String, TextFont As Font, MaxWidth As Integer) As Size
+        Return TextRenderer.MeasureText(Value, TextFont, New Size(Math.Max(1, MaxWidth), Integer.MaxValue), TextFormatFlags.NoPadding Or TextFormatFlags.NoPrefix Or TextFormatFlags.TextBoxControl)
+    End Function
+
+    Private Function MiddleEllipsis(Value As String, TextFont As Font, MaxWidth As Integer) As String
+        Const Ellipsis As String = "..."
+        If MeasureTextWidth(Value, TextFont) <= MaxWidth Then Return Value
+        Dim HeadLength As Integer = Math.Max(1, Value.Length \ 2)
+        Dim TailLength As Integer = Math.Max(1, Value.Length - HeadLength)
+        Do While HeadLength + TailLength > 2 AndAlso MeasureTextWidth(Value.Substring(0, HeadLength) & Ellipsis & Value.Substring(Value.Length - TailLength), TextFont) > MaxWidth
+            If HeadLength >= TailLength AndAlso HeadLength > 1 Then
+                HeadLength -= 1
+            ElseIf TailLength > 1 Then
+                TailLength -= 1
+            Else
+                Exit Do
+            End If
+        Loop
+        Return Value.Substring(0, HeadLength) & Ellipsis & Value.Substring(Value.Length - TailLength)
+    End Function
 
     Private Sub SetWatcherButtonIdle()
         WatcherEnabled = False
