@@ -10,7 +10,7 @@ Public Class Form1
     Dim Root As String = Application.StartupPath
     Dim AppData As String = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
     Dim WaitScale As Integer = 0
-    Dim SettingsLoc As Point = New Point(368, 255)
+    Dim SettingsLoc As Point
     Dim LoadedSettings As FormSettings.Settings
     Dim SkipList As New List(Of String)
     Private LastSelectedSpandrelModelPath As String = ""
@@ -90,7 +90,6 @@ Public Class Form1
 #Region "Loading"
 
     Private Async Sub Form1_Load(sender As Object, e As EventArgs) Handles MyBase.Load
-        Me.ClientSize = New Size(980, 585)
         Me.SetStyle(ControlStyles.OptimizedDoubleBuffer, True)
         Application.CurrentCulture = New Globalization.CultureInfo("EN-US")
         PreloadImageList()
@@ -761,6 +760,8 @@ Public Class Form1
     End Sub
 
     Private Sub SetSettingsWindow()
+        ' Place backend options beside the auto-scaled program settings panel.
+        SettingsLoc = New Point(SettingsGroup.Right + 16, SettingsGroup.Top)
         CaffeGroup.Visible = False
         VulkanGroup.Visible = False
         WaifuCPPGroup.Visible = False

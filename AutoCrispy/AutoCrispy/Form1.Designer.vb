@@ -393,7 +393,7 @@ Partial Class Form1
         '
         'NumericThreads
         '
-        Me.NumericThreads.Location = New System.Drawing.Point(264, 71)
+        Me.NumericThreads.Location = New System.Drawing.Point(264, 78)
         Me.NumericThreads.Margin = New System.Windows.Forms.Padding(4, 5, 4, 5)
         Me.NumericThreads.Maximum = New Decimal(New Integer() {64, 0, 0, 0})
         Me.NumericThreads.Minimum = New Decimal(New Integer() {1, 0, 0, 0})
@@ -407,7 +407,7 @@ Partial Class Form1
         Me.ThreadComboBox.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList
         Me.ThreadComboBox.FormattingEnabled = True
         Me.ThreadComboBox.Items.AddRange(New Object() {"Single", "Custom", "All", "Max (512) (!!)"})
-        Me.ThreadComboBox.Location = New System.Drawing.Point(98, 71)
+        Me.ThreadComboBox.Location = New System.Drawing.Point(98, 78)
         Me.ThreadComboBox.Margin = New System.Windows.Forms.Padding(4, 5, 4, 5)
         Me.ThreadComboBox.Name = "ThreadComboBox"
         Me.ThreadComboBox.Size = New System.Drawing.Size(156, 28)
@@ -427,9 +427,9 @@ Partial Class Form1
         '
         Me.BackendStatusLabel.AutoEllipsis = True
         Me.BackendStatusLabel.ForeColor = System.Drawing.SystemColors.GrayText
-        Me.BackendStatusLabel.Location = New System.Drawing.Point(14, 57)
+        Me.BackendStatusLabel.Location = New System.Drawing.Point(14, 59)
         Me.BackendStatusLabel.Name = "BackendStatusLabel"
-        Me.BackendStatusLabel.Size = New System.Drawing.Size(310, 14)
+        Me.BackendStatusLabel.Size = New System.Drawing.Size(310, 16)
         Me.BackendStatusLabel.TabIndex = 15
         Me.BackendStatusLabel.Text = "Spandrel model scan pending."
         '
@@ -456,7 +456,7 @@ Partial Class Form1
         'Label12
         '
         Me.Label12.AutoSize = True
-        Me.Label12.Location = New System.Drawing.Point(9, 74)
+        Me.Label12.Location = New System.Drawing.Point(9, 81)
         Me.Label12.Margin = New System.Windows.Forms.Padding(4, 0, 4, 0)
         Me.Label12.Name = "Label12"
         Me.Label12.Size = New System.Drawing.Size(71, 20)
