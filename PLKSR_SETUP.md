@@ -1,14 +1,14 @@
-# Spandrel upscalers: PLKSR, DAT2, and generic checkpoints
+# Spandrel models: PLKSR, DAT2, and generic checkpoints
 
-AutoCrispy can run the fixed PBRify 4× models and compatible checkpoints recognized by Spandrel. These are optional texture upscalers, not the full PBRify material workflow: AutoCrispy does not generate normal, roughness, or AO maps, and it does not need the chaiNNer GUI. Checkpoint weights and the Python/PyTorch runtime are installed separately; do not add model weights to the Git repository.
+AutoCrispy provides one Spandrel backend with a selectable model. PLKSR V3 and DAT2 V4 are model choices in that selector, not separate backends. These are optional texture processors, not the full PBRify material workflow: AutoCrispy does not generate normal, roughness, or AO maps, and it does not need the chaiNNer GUI. Checkpoint weights and the Python/PyTorch runtime are installed separately; do not add model weights to the Git repository.
 
-- **PLKSR** — `4x-PBRify_RPLKSRd_V3.pth` (RealPLKSR-DySample)
-- **DAT2** — `4x-PBRify_UpscalerV4.pth` (DAT architecture / DAT2 model)
-- **Spandrel** — any checkpoint recognized by Spandrel as a 4× RGB super-resolution model
+- **PLKSR V3** — `4x-PBRify_RPLKSRd_V3.pth` (RealPLKSR-DySample; auto-selected when present)
+- **DAT2 V4** — `4x-PBRify_UpscalerV4.pth` (DAT architecture / DAT2 model)
+- **Generic Spandrel** — recognized 1× or 4× RGB super-resolution checkpoints, all shown in the same selector
 
 ## 1. Install checkpoints
 
-Use one shared **`models`** folder for the checkpoints, either under the configured backend folder or beside AutoCrispy. The fixed PLKSR and DAT2 backends are recognized by their exact `.pth` filenames even in this shared folder. Example:
+Use one shared **`models`** folder for the checkpoints, either under the configured backend folder or beside AutoCrispy. PLKSR and DAT2 checkpoints are recognized by Spandrel and appear as model choices in the same selector. Example:
 
 ```text
 Backend/
@@ -26,9 +26,9 @@ Download the fixed checkpoints from their releases:
 
 The optional [PLKSR source ZIP](https://github.com/dslisleedh/PLKSR) is not executed by AutoCrispy. Use the `.pth` asset from the V4 release. The PLKSR and DAT2 checkpoints are independent; install either or both.
 
-The generic **Spandrel** selector uses the same `models` folder. It checks `.pth`, `.pt`, `.ckpt`, and `.safetensors` files there and up to three nested folders. Each candidate is loaded through Spandrel; only image super-resolution models with scale 4 and three input and output channels appear in the selector. Unsupported, corrupt, non-SR, non-4×, or non-RGB checkpoints are skipped. Older `Spandrel` folders are still searched for compatibility. The legacy **ESRGAN** selector remains separate and unchanged.
+The **Spandrel** selector uses the same `models` folder. It checks `.pth`, `.pt`, `.ckpt`, and `.safetensors` files there and up to three nested folders. Each candidate is loaded through Spandrel; only image super-resolution models with scale 1× or 4× and three input and output channels appear. Unsupported, corrupt, non-SR, other-scale, or non-RGB checkpoints are skipped. Older `Spandrel` folders are still searched for compatibility. The legacy **ESRGAN** selector remains separate and unchanged.
 
-For example, [4× GameAI 2.0](https://openmodeldb.info/models/4x-GameAI-2-0) is listed as a 4× RGB ESRGAN PyTorch checkpoint, and Spandrel supports regular ESRGAN/RRDBNet models. Put its `.pth` file in `models`; if the installed Spandrel version recognizes the checkpoint, it will appear in the generic selector.
+For example, [4× GameAI 2.0](https://openmodeldb.info/models/4x-GameAI-2-0) is a 4× RGB ESRGAN checkpoint. [1× DXTDecompressor Source V3](https://openmodeldb.info/models/1x-DXTDecompressor-Source-V3) is a 1× RGB ESRGAN model for removing DXT1 compression artifacts; it preserves image dimensions rather than enlarging them. Put either `.pth` file in `models`; if Spandrel recognizes the checkpoint, it appears in the same selector. For DDS textures, use TexConv to convert to PNG before the Spandrel stage and convert back to DDS afterward.
 
 ## 2. Install the inference runtime
 
@@ -40,15 +40,15 @@ Install a PyTorch build appropriate for the computer. For NVIDIA GPU acceleratio
 python -m pip install "spandrel==0.4.2" Pillow
 ```
 
-Spandrel 0.4.2 detects RealPLKSR-DySample, DAT architectures, and other supported architectures. AutoCrispy validates model scale, purpose, and channels before inference. If CUDA is unavailable, it falls back to CPU; CPU processing will be much slower. The generic selector validates candidate files on startup, so checking a folder containing many large checkpoints can take a little time.
+Spandrel 0.4.2 detects RealPLKSR-DySample, DAT architectures, ESRGAN models, and other supported architectures. AutoCrispy validates scale (1× or 4× for generic models), purpose, and channels before inference. If CUDA is unavailable, it falls back to CPU; CPU processing will be much slower. The generic selector validates candidate files on startup, so checking a folder containing many large checkpoints can take a little time.
 
 ## 3. Use a Spandrel model
 
-1. Start AutoCrispy. The exact PLKSR and DAT2 checkpoints appear as separate backends when installed. The generic **Spandrel** backend appears when at least one eligible checkpoint is found in `models` (or the legacy `Spandrel` folder).
-2. If PLKSR and DAT2 are both installed, PLKSR remains the default; DAT2 is preferred over generic Spandrel when PLKSR is absent. If only generic Spandrel models are found, that backend is selected. Choose a model from its selector, then add it from the chain tab if needed.
+1. Start AutoCrispy. The **Spandrel** backend appears when at least one eligible checkpoint is found in `models` (or the legacy `Spandrel` folder).
+2. Choose a model from the selector, then add it from the chain tab if needed. PLKSR V3 is selected by default when installed; otherwise DAT2 V4 is preferred, then the first eligible model.
 3. Start the watcher as usual. The helper loads the selected checkpoint once per batch, then processes new textures.
 
-A saved chain entry using the exact legacy model `4x_gameai_2.0` is upgraded to PLKSR when it is installed, otherwise to DAT2 if that is the available fixed PBRify backend. Other ESRGAN chains are left alone.
+A saved chain entry using the exact legacy model `4x_gameai_2.0` is upgraded to PLKSR V3 when that checkpoint is recognized, or DAT2 V4 otherwise if recognized. If neither is installed, the saved ESRGAN entry is left unchanged; other ESRGAN chains are also left alone.
 
 The tile-size setting controls the maximum inference tile size. Start at `512`; increase it for fewer tiles/faster processing if there is enough GPU memory, or lower it if inference runs out of memory. Set it to `0` to try processing each image without tiling; on an out-of-memory error, AutoCrispy retries with 512-pixel tiles and then smaller tiles automatically. The CPU checkbox forces CPU inference. **DAT2 V4 is substantially slower and more memory-intensive than the PLKSR V3 option**, so tiled inference is recommended for large textures.
 

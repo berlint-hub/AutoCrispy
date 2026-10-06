@@ -88,6 +88,7 @@ class SpandrelRunnerTests(unittest.TestCase):
             root = Path(temporary)
             files = {
                 "valid.pth": root / "valid.pth",
+                "1x-DXTDecompressor-Source-V3.pth": root / "1x-DXTDecompressor-Source-V3.pth",
                 "wrong-scale.pt": root / "wrong-scale.pt",
                 "wrong-channels.ckpt": root / "wrong-channels.ckpt",
                 "wrong-purpose.safetensors": root / "wrong-purpose.safetensors",
@@ -105,6 +106,9 @@ class SpandrelRunnerTests(unittest.TestCase):
 
             models: dict[str, object] = {
                 "valid.pth": FakeImageDescriptor(),
+                "1x-DXTDecompressor-Source-V3.pth": FakeImageDescriptor(
+                    scale=1, architecture="ESRGAN"
+                ),
                 "wrong-scale.pt": FakeImageDescriptor(scale=2),
                 "wrong-channels.ckpt": FakeImageDescriptor(output_channels=1),
                 "wrong-purpose.safetensors": FakeImageDescriptor(purpose="Denoise"),
@@ -131,6 +135,7 @@ class SpandrelRunnerTests(unittest.TestCase):
             self.assertEqual(
                 emitted,
                 [
+                    str(files["1x-DXTDecompressor-Source-V3.pth"].resolve()),
                     str(files[runner.PLKSR_MODEL_NAME].resolve()),
                     str(files[runner.DAT2_MODEL_NAME].resolve()),
                     str(files["deep-valid.pt"].resolve()),
@@ -163,7 +168,19 @@ class SpandrelRunnerTests(unittest.TestCase):
             self.assertEqual(descriptor.to_args, (device, dtype))
             self.assertTrue(descriptor.model.evaluated)
 
-    def test_generic_loading_rejects_non_four_x_rgb_models(self) -> None:
+    def test_generic_loading_accepts_1x_dxt_decompressor(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkpoint = Path(temporary) / "1x-DXTDecompressor-Source-V3.pth"
+            checkpoint.touch()
+            descriptor = FakeImageDescriptor(scale=1, architecture="ESRGAN")
+            torch, spandrel = self.make_fake_modules({checkpoint.name: descriptor})
+            with patch.dict(sys.modules, {"torch": torch, "spandrel": spandrel}):
+                loaded, _, _, _ = runner._load_model(
+                    checkpoint, force_cpu=True, generic_model=True
+                )
+            self.assertIs(loaded, descriptor)
+
+    def test_generic_loading_rejects_unsupported_scales(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             checkpoint = Path(temporary) / "two-x.pth"
             checkpoint.touch()
@@ -171,7 +188,7 @@ class SpandrelRunnerTests(unittest.TestCase):
                 {checkpoint.name: FakeImageDescriptor(scale=2)}
             )
             with patch.dict(sys.modules, {"torch": torch, "spandrel": spandrel}):
-                with self.assertRaisesRegex(ValueError, "4x RGB super-resolution"):
+                with self.assertRaisesRegex(ValueError, "1x or 4x RGB super-resolution"):
                     runner._load_model(checkpoint, force_cpu=True, generic_model=True)
 
     def test_list_models_cli_does_not_require_inference_arguments(self) -> None:

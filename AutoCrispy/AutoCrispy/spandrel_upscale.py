@@ -1,8 +1,8 @@
 """Folder-based Spandrel inference bridge for AutoCrispy.
 
-Loads the fixed PBRify PLKSR/DAT2 models or a Spandrel-recognized generic
-checkpoint, then upscales supported files in one input directory. The selected
-model is kept resident for the whole batch.
+Loads a PLKSR/DAT2 checkpoint or a Spandrel-recognized generic checkpoint,
+then processes supported files in one input directory. The selected model is
+kept resident for the whole batch.
 """
 
 from __future__ import annotations
@@ -33,18 +33,19 @@ MODEL_PROFILES = {
     DAT2_MODEL_NAME.casefold(): ("DAT2", "DAT"),
 }
 MODEL_SCALE = 4
+SUPPORTED_GENERIC_SCALES = {1, MODEL_SCALE}
 TILE_OVERLAP = 32
 MODEL_FILE_EXTENSIONS = {".pth", ".pt", ".ckpt", ".safetensors"}
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Upscale a folder of textures with Spandrel-supported 4x RGB models."
+        description="Process a folder with Spandrel-supported 1x or 4x RGB models."
     )
     parser.add_argument(
         "--list-models",
         type=Path,
-        help="List supported 4x RGB super-resolution checkpoints in a folder and exit",
+        help="List supported 1x or 4x RGB super-resolution checkpoints in a folder and exit",
     )
     parser.add_argument(
         "model", type=Path, nargs="?", help="PyTorch checkpoint to run"
@@ -63,7 +64,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--generic-model",
         action="store_true",
-        help="Allow any Spandrel-recognized 4x RGB super-resolution checkpoint",
+        help="Allow any Spandrel-recognized 1x or 4x RGB super-resolution checkpoint",
     )
     parser.add_argument(
         "--debug", action="store_true", help="Print a full traceback on errors"
@@ -103,9 +104,10 @@ def _load_model(
 
     architecture = str(descriptor.architecture.id)
     tags = {str(tag).casefold() for tag in descriptor.tags}
+    allowed_scales = SUPPORTED_GENERIC_SCALES if generic_model else {MODEL_SCALE}
     common_valid = (
         descriptor.purpose == "SR"
-        and descriptor.scale == MODEL_SCALE
+        and descriptor.scale in allowed_scales
         and descriptor.input_channels == 3
         and descriptor.output_channels == 3
     )
@@ -121,7 +123,7 @@ def _load_model(
 
     if not common_valid or not model_valid:
         if generic_model:
-            expected_description = "a Spandrel-supported 4x RGB super-resolution"
+            expected_description = "a Spandrel-supported 1x or 4x RGB super-resolution"
         elif display_name == "RealPLKSR-DySample":
             expected_description = "a 4x RealPLKSR-DySample RGB"
         else:
@@ -279,7 +281,8 @@ def _process_image(
     rgb_float = rgb.astype(np.float32) / 255.0
     upscaled = _upscale_with_fallback(rgb_float, model, device, dtype, tile_size)
     upscaled = np.clip(np.rint(upscaled * 255.0), 0, 255).astype(np.uint8)
-    expected_size = (rgb.shape[1] * MODEL_SCALE, rgb.shape[0] * MODEL_SCALE)
+    model_scale = int(model.scale)
+    expected_size = (rgb.shape[1] * model_scale, rgb.shape[0] * model_scale)
 
     if upscaled.shape[:2] != (expected_size[1], expected_size[0]):
         raise ValueError(
@@ -345,7 +348,7 @@ def list_supported_models(model_root: Path, debug: bool = False) -> int:
             supported = (
                 isinstance(descriptor, ImageModelDescriptor)
                 and descriptor.purpose == "SR"
-                and descriptor.scale == MODEL_SCALE
+                and descriptor.scale in SUPPORTED_GENERIC_SCALES
                 and descriptor.input_channels == 3
                 and descriptor.output_channels == 3
             )

@@ -188,12 +188,6 @@ Public Class Form1
 
     Private Sub AddSpandrelBackends()
         If Not File.Exists(Path.Combine(Application.StartupPath, SpandrelRunnerName)) Then Return
-        If PLKSRModelPath <> "" AndAlso Not ExeComboBox.Items.Contains(PLKSRBackendName) Then
-            ExeComboBox.Items.Add(PLKSRBackendName)
-        End If
-        If DAT2ModelPath <> "" AndAlso Not ExeComboBox.Items.Contains(DAT2BackendName) Then
-            ExeComboBox.Items.Add(DAT2BackendName)
-        End If
         If SupportedSpandrelModels.Count > 0 AndAlso FindPythonExecutable() <> "" AndAlso
             Not ExeComboBox.Items.Contains(SpandrelBackendName) Then
             ExeComboBox.Items.Add(SpandrelBackendName)
@@ -278,6 +272,10 @@ Public Class Form1
                     Dim PreferredBackendIndex As Integer = GetPreferredSpandrelBackendIndex()
                     If PreferredBackendIndex >= 0 Then ExeComboBox.SelectedIndex = PreferredBackendIndex
                 End If
+                If String.Equals(If(ExeComboBox.SelectedItem, "").ToString(), SpandrelBackendName, StringComparison.OrdinalIgnoreCase) Then
+                    SetSettingsWindow()
+                End If
+                If GetPreferredSpandrelBackendIndex() >= 0 Then ReplaceLegacyUpscalerChain()
             End If
         Catch ex As OperationCanceledException
             ' A newer folder scan superseded this request.
@@ -381,16 +379,36 @@ Public Class Form1
     End Function
 
     Private Function GetPreferredSpandrelBackendIndex() As Integer
-        Dim PreferredIndex As Integer = ExeComboBox.Items.IndexOf(PLKSRBackendName)
-        If PreferredIndex >= 0 Then Return PreferredIndex
-        PreferredIndex = ExeComboBox.Items.IndexOf(DAT2BackendName)
-        If PreferredIndex >= 0 Then Return PreferredIndex
         Return ExeComboBox.Items.IndexOf(SpandrelBackendName)
     End Function
 
     Private Function GetPreferredSpandrelBackendName() As String
-        If ExeComboBox.Items.Contains(PLKSRBackendName) Then Return PLKSRBackendName
-        If ExeComboBox.Items.Contains(DAT2BackendName) Then Return DAT2BackendName
+        If ExeComboBox.Items.Contains(SpandrelBackendName) Then Return SpandrelBackendName
+        Return ""
+    End Function
+
+    Private Function GetPreferredSpandrelModelIndex() As Integer
+        For i As Integer = 0 To SupportedSpandrelModels.Count - 1
+            If Path.GetFileName(SupportedSpandrelModels(i)).Equals(PLKSRCheckpointName, StringComparison.OrdinalIgnoreCase) Then
+                Return i
+            End If
+        Next
+        For i As Integer = 0 To SupportedSpandrelModels.Count - 1
+            If Path.GetFileName(SupportedSpandrelModels(i)).Equals(DAT2CheckpointName, StringComparison.OrdinalIgnoreCase) Then
+                Return i
+            End If
+        Next
+        If SupportedSpandrelModels.Count > 0 Then Return 0
+        Return -1
+    End Function
+
+    Private Function GetPreferredPBRifyModelPath() As String
+        For Each ModelPath As String In SupportedSpandrelModels
+            If Path.GetFileName(ModelPath).Equals(PLKSRCheckpointName, StringComparison.OrdinalIgnoreCase) Then Return ModelPath
+        Next
+        For Each ModelPath As String In SupportedSpandrelModels
+            If Path.GetFileName(ModelPath).Equals(DAT2CheckpointName, StringComparison.OrdinalIgnoreCase) Then Return ModelPath
+        Next
         Return ""
     End Function
 
@@ -411,9 +429,12 @@ Public Class Form1
     Private Sub ReplaceLegacyUpscalerChain()
         Dim PreferredBackend As String = GetPreferredSpandrelBackendName()
         If PreferredBackend = "" Then Return
-        Dim PreferredModel As String = GetSpandrelModelPath(PreferredBackend)
-        Dim PreferredName As String = If(PreferredBackend = DAT2BackendName, "PBRify V4 DAT2 4x", "PLKSR 4x")
-        Dim PreferredPackageType As String = If(PreferredBackend = DAT2BackendName, DAT2BackendName, "RealPLKSR")
+        ' Keep the old GameAI migration limited to the known 4x PBRify models;
+        ' a generic 1x restoration model must not replace a saved 4x chain step.
+        Dim PreferredModel As String = GetPreferredPBRifyModelPath()
+        If PreferredModel = "" Then Return
+        Dim PreferredName As String = "Spandrel - " & Path.GetFileName(PreferredModel)
+        Dim PreferredPackageType As String = SpandrelBackendName
 
         Dim ChainWasUpdated As Boolean = False
         For i As Integer = 0 To ChainList.Count - 1
@@ -713,7 +734,8 @@ Public Class Form1
             For Each ModelPath As String In SupportedSpandrelModels
                 PyModel.Items.Add(Path.GetFileName(ModelPath))
             Next
-            If PyModel.Items.Count > 0 Then PyModel.SelectedIndex = 0
+            Dim PreferredModelIndex As Integer = GetPreferredSpandrelModelIndex()
+            If PreferredModelIndex >= 0 Then PyModel.SelectedIndex = PreferredModelIndex
             PyModel.Enabled = True
         Else
             For Each ModelPath As String In PyModels
@@ -1259,7 +1281,7 @@ Public Class Form1
                 ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, "PBRify V4 DAT2 4x", ChainThumbs.Item(6)))
                 ChainList.Add(New FormSettings.ChainObject("PBRify V4 DAT2 4x", 6, "", DAT2BackendName, Me))
             Case SpandrelBackendName
-                Dim ModelDisplayName As String = "Spandrel 4x - " & Path.GetFileName(GetSelectedUpscaleModel())
+                Dim ModelDisplayName As String = "Spandrel - " & Path.GetFileName(GetSelectedUpscaleModel())
                 ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, ModelDisplayName, ChainThumbs.Item(6)))
                 ChainList.Add(New FormSettings.ChainObject(ModelDisplayName, 6, "", SpandrelBackendName, Me))
         End Select
