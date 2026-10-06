@@ -888,12 +888,15 @@ Public Class Form1
     Private Sub MakeUpscale()
         Dim TempPath As String = GetChainPath("Temp", 0)
         Dim ThreadCount As Integer = GetThreads(LoadedSettings.BasicSettings.ThreadIndex, LoadedSettings.BasicSettings.ThreadCount)
+        If ThreadCount < 1 Then ThreadCount = 1
         Dim Source As String() = GetMissingFiles(LoadedSettings.Paths.InputPath, LoadedSettings.Paths.OutputPath)
         If WorkHorse.CancellationPending Then
             CleanupUpscaleTemporaryFolders()
             Return
         End If
-        For i = 0 To Source.Count - 1 Step ThreadCount
+        ' CopyFiles advances this cursor, so the outer loop must not also add a batch step.
+        Dim CurrentIndex As Integer = 0
+        While CurrentIndex < Source.Count
             If WorkHorse.CancellationPending Then
                 CleanupUpscaleTemporaryFolders()
                 Return
@@ -908,7 +911,7 @@ Public Class Form1
             Next
             ChainPaths.Add(LoadedSettings.Paths.OutputPath)
             Directory.CreateDirectory(TempPath)
-            CopyFiles(Source, SkipList, TempPath, i, ThreadCount)
+            CopyFiles(Source, SkipList, TempPath, CurrentIndex, ThreadCount)
             If WorkHorse.CancellationPending Then
                 CleanupUpscaleTemporaryFolders()
                 Return
@@ -980,9 +983,9 @@ Public Class Form1
 
             ' Keep BackgroundWorker progress within its valid range; the progress poller reads
             ' overall completion from the input/output folders instead of this batch percentage.
-            Dim ProgressPercentage As Integer = CInt(Math.Floor(((i + ThreadCount) * 100.0) / Source.Count))
+            Dim ProgressPercentage As Integer = CInt(Math.Floor((CurrentIndex * 100.0) / Source.Count))
             WorkHorse.ReportProgress(Math.Max(0, Math.Min(100, ProgressPercentage)))
-        Next
+        End While
         If CleanupCheckBox.Checked = True Then
             For Each SourceImage As String In Source
                 File.Delete(SourceImage)
@@ -996,7 +999,7 @@ Public Class Form1
 
     Private Sub CopyFiles(FileList As String(), ByRef SkipList As List(Of String), RootPath As String, ByRef CurrentIndex As Integer, BatchSize As Integer)
         Dim CopyCounter As Integer = 0
-        Do While CopyCounter < BatchSize AndAlso Not WorkHorse.CancellationPending
+        Do While CurrentIndex < FileList.Count AndAlso CopyCounter < BatchSize AndAlso Not WorkHorse.CancellationPending
             Dim FilePath As String = FileList(CurrentIndex)
             If Not SkipList.Contains(FilePath) Then
                 Select Case LoadedSettings.ExpertSettings.AlphaMode
@@ -1019,7 +1022,6 @@ Public Class Form1
                         End If
                 End Select
             End If
-            If CurrentIndex >= FileList.Count - 1 Then Exit Do
             CurrentIndex += 1
         Loop
     End Sub
