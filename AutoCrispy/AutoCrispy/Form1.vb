@@ -28,6 +28,11 @@ Public Class Form1
     Public Property xBRZPath As String
     Public Property PyPath As String
     Public Property PyModels As New List(Of String)
+    Public Property PLKSRModelPath As String
+
+    Private Const SpandrelBackendName As String = "RealPLKSR (Spandrel)"
+    Private Const PLKSRCheckpointName As String = "4x-PBRify_RPLKSRd_V3.pth"
+    Private Const SpandrelRunnerName As String = "spandrel_upscale.py"
 
 #End Region
 
@@ -79,7 +84,13 @@ Public Class Form1
         End If
         StartUpCheckEXE()
         If ExeComboBox.Items.Count > 0 Then
-            ExeComboBox.SelectedIndex = 0
+            Dim PreferredBackendIndex As Integer = ExeComboBox.Items.IndexOf(SpandrelBackendName)
+            If PreferredBackendIndex >= 0 Then
+                ExeComboBox.SelectedIndex = PreferredBackendIndex
+                ReplaceLegacyUpscalerChain()
+            Else
+                ExeComboBox.SelectedIndex = 0
+            End If
             SetSettingsWindow()
         End If
         ChainControl.DrawList(ChainControl.ListItems)
@@ -98,9 +109,22 @@ Public Class Form1
     End Sub
 
     Private Sub StartUpCheckEXE()
+        ExeComboBox.Items.Clear()
+        PyModels.Clear()
+        PyModel.Items.Clear()
+        PyPath = ""
+        PLKSRModelPath = ""
+
+        If Not Directory.Exists(Root) Then
+            PLKSRModelPath = FindPLKSRModel(Application.StartupPath)
+            If PLKSRModelPath <> "" AndAlso File.Exists(Path.Combine(Application.StartupPath, SpandrelRunnerName)) Then
+                ExeComboBox.Items.Add(SpandrelBackendName)
+            End If
+            Exit Sub
+        End If
+
         Dim RootFolders As List(Of String) = Directory.GetDirectories(Root).ToList
         RootFolders.Add(Root)
-        ExeComboBox.Items.Clear()
         For Each Folder As String In RootFolders
             AddEXE(Folder, "\waifu2x-caffe-cui.exe", "Waifu2x Caffe", CaffePath)
             AddEXE(Folder, "\waifu2x-ncnn-vulkan.exe", "Waifu2x Vulkan", WaifuNcnnPath)
@@ -111,25 +135,82 @@ Public Class Form1
             AddEXE(Folder, "\Anime4KCPP_CLI.exe", "Anime4k CPP", Anime4kPath)
             AddEXE(Folder, "\texconv.exe", "TexConv", TexConvPath)
             AddEXE(Folder, "\ScalerTest_Windows.exe", "xBRZ", xBRZPath)
+
             If File.Exists(Folder & "\esrgan.exe") Then
-                PyModels.Clear()
-                PyModel.Items.Clear()
-                ExeComboBox.Items.Add("ESRGAN")
+                If Not ExeComboBox.Items.Contains("ESRGAN") Then ExeComboBox.Items.Add("ESRGAN")
                 PyPath = "\" & IIf(Folder <> Root, Path.GetFileName(Folder), "") & "\esrgan.exe"
                 For Each SubFolder As String In Directory.GetDirectories(Folder)
-                    Dim Models As String() = Directory.EnumerateFiles(SubFolder, "*.pth").ToArray
-                    For Each PythonModel As String In Models
-                        PyModels.Add(PythonModel)
-                        PyModel.Items.Add(Path.GetFileName(PythonModel))
+                    For Each PythonModel As String In Directory.EnumerateFiles(SubFolder, "*.pth")
+                        If Not Path.GetFileName(PythonModel).Equals(PLKSRCheckpointName, StringComparison.OrdinalIgnoreCase) AndAlso Not PyModels.Contains(PythonModel) Then
+                            PyModels.Add(PythonModel)
+                        End If
                     Next
                 Next
-                If PyModels.Count > 0 Then
-                    PyModel.SelectedIndex = 0
-                Else
-                    MsgBox("No ESRGAN Models Found!", MsgBoxStyle.Critical)
+            End If
+        Next
+
+        PLKSRModelPath = FindPLKSRModel(Root)
+        If PLKSRModelPath = "" AndAlso Not String.Equals(Root, Application.StartupPath, StringComparison.OrdinalIgnoreCase) Then
+            PLKSRModelPath = FindPLKSRModel(Application.StartupPath)
+        End If
+        If PLKSRModelPath <> "" AndAlso File.Exists(Path.Combine(Application.StartupPath, SpandrelRunnerName)) Then
+            ExeComboBox.Items.Add(SpandrelBackendName)
+        End If
+
+        If ExeComboBox.Items.Contains("ESRGAN") AndAlso PyModels.Count = 0 AndAlso PLKSRModelPath = "" Then
+            MsgBox("No ESRGAN Models Found!", MsgBoxStyle.Critical)
+        End If
+    End Sub
+
+    Private Function FindPLKSRModel(SearchRoot As String) As String
+        If Not Directory.Exists(SearchRoot) Then Return ""
+
+        Dim SearchFolders As New List(Of String) From {SearchRoot}
+        For Each FirstLevel As String In Directory.GetDirectories(SearchRoot)
+            SearchFolders.Add(FirstLevel)
+            For Each SecondLevel As String In Directory.GetDirectories(FirstLevel)
+                SearchFolders.Add(SecondLevel)
+            Next
+        Next
+
+        For Each SearchFolder As String In SearchFolders
+            For Each Candidate As String In Directory.GetFiles(SearchFolder)
+                If Path.GetFileName(Candidate).Equals(PLKSRCheckpointName, StringComparison.OrdinalIgnoreCase) Then
+                    Return Candidate
+                End If
+            Next
+        Next
+
+        Return ""
+    End Function
+
+    Private Sub ReplaceLegacyUpscalerChain()
+        If String.IsNullOrWhiteSpace(PLKSRModelPath) Then Return
+
+        Dim ChainWasUpdated As Boolean = False
+        For i As Integer = 0 To ChainList.Count - 1
+            Dim ChainItem As FormSettings.ChainObject = ChainList(i)
+            If ChainItem.PackageType = "ESRGAN" AndAlso ChainItem.Package IsNot Nothing Then
+                Dim PythonSettings As FormSettings.PythonPackage = CType(ChainItem.Package, FormSettings.PythonPackage)
+                If String.Equals(Path.GetFileNameWithoutExtension(PythonSettings.Model), "4x_gameai_2.0", StringComparison.OrdinalIgnoreCase) Then
+                    PythonSettings = New FormSettings.PythonPackage(PLKSRModelPath, PythonSettings.TileSize, PythonSettings.CPUOnly, True)
+                    ChainItem.Name = "RealPLKSR 4x"
+                    ChainItem.FileLocation = ""
+                    ChainItem.Package = PythonSettings
+                    ChainItem.PackageType = "RealPLKSR"
+                    ChainList(i) = ChainItem
+                    ChainWasUpdated = True
                 End If
             End If
         Next
+
+        If ChainWasUpdated Then
+            ChainControl.ListItems.Clear()
+            For Each ChainItem As FormSettings.ChainObject In ChainList
+                ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainControl.ListItems.Count, ChainItem.Name, ChainThumbs.Item(ChainItem.IconIndex)))
+            Next
+            ChainControl.DrawList(ChainControl.ListItems)
+        End If
     End Sub
 
     Private Sub AddEXE(Source As String, ExeName As String, ModelName As String, ByRef ModelPath As String)
@@ -179,7 +260,13 @@ Public Class Form1
         End If
         StartUpCheckEXE()
         If ExeComboBox.Items.Count > 0 Then
-            ExeComboBox.SelectedIndex = 0
+            Dim PreferredBackendIndex As Integer = ExeComboBox.Items.IndexOf(SpandrelBackendName)
+            If PreferredBackendIndex >= 0 Then
+                ExeComboBox.SelectedIndex = PreferredBackendIndex
+                ReplaceLegacyUpscalerChain()
+            Else
+                ExeComboBox.SelectedIndex = 0
+            End If
             SetSettingsWindow()
         End If
     End Sub
@@ -205,6 +292,7 @@ Public Class Form1
                 For Each ChainItem As FormSettings.ChainObject In ChainList
                     ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.IndexOf(ChainItem), ChainItem.Name, ChainThumbs.Item(ChainItem.IconIndex)))
                 Next
+                If ExeComboBox.Items.Contains(SpandrelBackendName) Then ReplaceLegacyUpscalerChain()
                 ChainControl.DrawList(ChainControl.ListItems)
             End If
         End Using
@@ -335,7 +423,7 @@ Public Class Form1
         xBRZGroup.Visible = False
         PyGroup.Visible = False
         VulkanNoise.Enabled = True
-        Select Case ExeComboBox.SelectedItem
+        Select Case If(ExeComboBox.SelectedItem, "").ToString()
             Case "Waifu2x Caffe"
                 MoveShowGroup(CaffeGroup)
             Case "Waifu2x Vulkan"
@@ -360,9 +448,44 @@ Public Class Form1
             Case "xBRZ"
                 MoveShowGroup(xBRZGroup)
             Case "ESRGAN"
+                ConfigurePythonModelSelector(False)
+                PyGroup.Text = "ESRGAN"
+                MoveShowGroup(PyGroup)
+            Case SpandrelBackendName
+                ConfigurePythonModelSelector(True)
+                PyGroup.Text = "RealPLKSR (Spandrel)"
                 MoveShowGroup(PyGroup)
         End Select
     End Sub
+
+    Private Sub ConfigurePythonModelSelector(UsePLKSR As Boolean)
+        PyModel.BeginUpdate()
+        PyModel.Items.Clear()
+        If UsePLKSR Then
+            If PLKSRModelPath <> "" Then
+                PyModel.Items.Add(Path.GetFileName(PLKSRModelPath))
+                PyModel.SelectedIndex = 0
+            End If
+            PyModel.Enabled = False
+        Else
+            For Each ModelPath As String In PyModels
+                PyModel.Items.Add(Path.GetFileName(ModelPath))
+            Next
+            If PyModel.Items.Count > 0 Then PyModel.SelectedIndex = 0
+            PyModel.Enabled = True
+        End If
+        PyModel.EndUpdate()
+    End Sub
+
+    Public Function GetSelectedUpscaleModel() As String
+        If If(ExeComboBox.SelectedItem, "").ToString() = SpandrelBackendName Then
+            Return PLKSRModelPath
+        End If
+        If PyModel.SelectedIndex >= 0 AndAlso PyModel.SelectedIndex < PyModels.Count Then
+            Return PyModels(PyModel.SelectedIndex)
+        End If
+        Return ""
+    End Function
 
     Sub MoveShowGroup(ByRef Source As GroupBox)
         Source.Location = SettingsLoc
@@ -422,6 +545,17 @@ Public Class Form1
         UpscaleProgress.Value = 0
         If ChainControl.ListItems.Count = 0 Then
             ChainList.Clear()
+        End If
+        If e.Error IsNot Nothing Then
+            WatchDog.Stop()
+            WatchDog.Enabled = False
+            WatchDogButton.Text = "Running: False"
+            WatchDogButton.Enabled = True
+            SwitchGroups(True)
+            Dim SingleRunPath As String = Path.Combine(Path.GetTempPath(), "Single_0")
+            If Directory.Exists(SingleRunPath) Then Directory.Delete(SingleRunPath, True)
+            MessageBox.Show("Upscaling failed: " & e.Error.GetBaseException().Message, "AutoCrispy error", MessageBoxButtons.OK, MessageBoxIcon.Error)
+            Exit Sub
         End If
         If e.Cancelled = True Then
             WatchDog.Enabled = False
@@ -564,17 +698,46 @@ Public Class Form1
     Private Sub StartBuilder(SourcePath As String, DestPath As String, ImageList As List(Of String), Model As FormSettings.ChainObject)
         If ImageList.Count > 0 Then
             Dim BuildProcess As ProcessStartInfo
-            If Model.PackageType = "ESRGAN" OrElse Model.PackageType.Contains("Vulkan") Then
-                BuildProcess = New ProcessStartInfo(Root & Model.FileLocation, MakeCommand(SourcePath, DestPath, Model.PackageType, Model.Package))
-                BuildProcess.WorkingDirectory = Directory.GetParent(Root & Model.FileLocation).FullName
+            If Model.PackageType = "ESRGAN" OrElse Model.PackageType = "RealPLKSR" OrElse Model.PackageType.Contains("Vulkan") Then
+                If Model.PackageType = "RealPLKSR" Then
+                    Dim PythonExecutable As String = FindPythonExecutable()
+                    Dim RunnerPath As String = Path.Combine(Application.StartupPath, SpandrelRunnerName)
+                    If PythonExecutable = "" Then
+                        Throw New InvalidOperationException("RealPLKSR needs Python 3.10 or newer. Add python.exe to PATH, place it beside AutoCrispy, or set AUTOCRISPY_PYTHON to its full path. See PLKSR_SETUP.md.")
+                    End If
+                    If Not File.Exists(RunnerPath) Then
+                        Throw New FileNotFoundException("The AutoCrispy Spandrel runner was not found.", RunnerPath)
+                    End If
+                    BuildProcess = New ProcessStartInfo(PythonExecutable, MakeCommand(SourcePath, DestPath, Model.PackageType, Model.Package))
+                    BuildProcess.WorkingDirectory = Application.StartupPath
+                Else
+                    BuildProcess = New ProcessStartInfo(Root & Model.FileLocation, MakeCommand(SourcePath, DestPath, Model.PackageType, Model.Package))
+                    BuildProcess.WorkingDirectory = Directory.GetParent(Root & Model.FileLocation).FullName
+                End If
                 BuildProcess.RedirectStandardOutput = True
                 BuildProcess.RedirectStandardError = True
                 BuildProcess.UseShellExecute = False
                 BuildProcess.CreateNoWindow = True
                 Dim BatchProcess As Process = Process.Start(BuildProcess)
-                BatchProcess.WaitForExit()
-                If LoadedSettings.ExpertSettings.Logging = True Then
-                    WriteLog(BatchProcess, LoadedSettings.Paths.OutputPath)
+                If Model.PackageType = "RealPLKSR" Then
+                    Dim StandardOutputTask = BatchProcess.StandardOutput.ReadToEndAsync()
+                    Dim StandardErrorTask = BatchProcess.StandardError.ReadToEndAsync()
+                    BatchProcess.WaitForExit()
+                    Dim StandardOutput As String = StandardOutputTask.Result
+                    Dim StandardError As String = StandardErrorTask.Result
+                    If LoadedSettings.ExpertSettings.Logging OrElse BatchProcess.ExitCode <> 0 Then
+                        WriteProcessLog(BuildProcess, StandardOutput, StandardError, LoadedSettings.Paths.OutputPath)
+                    End If
+                    If BatchProcess.ExitCode <> 0 Then
+                        Dim Details As String = If(StandardError.Trim() <> "", StandardError.Trim(), StandardOutput.Trim())
+                        If Details.Length > 2000 Then Details = Details.Substring(0, 2000) & "..."
+                        Throw New InvalidOperationException("RealPLKSR inference failed (exit code " & BatchProcess.ExitCode.ToString() & "). " & Details)
+                    End If
+                Else
+                    BatchProcess.WaitForExit()
+                    If LoadedSettings.ExpertSettings.Logging = True Then
+                        WriteLog(BatchProcess, LoadedSettings.Paths.OutputPath)
+                    End If
                 End If
             Else
                 Dim ProcessBag As New List(Of Process)
@@ -638,6 +801,8 @@ Public Class Form1
                 Return MakeXBRZCommand(Source, Dest, Package)
             Case "ESRGAN"
                 Return MakePyCommand(Source, Dest, Package)
+            Case "RealPLKSR"
+                Return MakeSpandrelCommand(Source, Dest, Package)
         End Select
         Return ""
     End Function
@@ -674,6 +839,9 @@ Public Class Form1
             Case "ESRGAN"
                 ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, "ESRGAN", ChainThumbs.Item(6)))
                 ChainList.Add(New FormSettings.ChainObject("ESRGAN", 6, PyPath, "ESRGAN", Me))
+            Case SpandrelBackendName
+                ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, "RealPLKSR 4x", ChainThumbs.Item(6)))
+                ChainList.Add(New FormSettings.ChainObject("RealPLKSR 4x", 6, "", "RealPLKSR", Me))
         End Select
         ChainControl.DrawList(ChainControl.ListItems)
     End Sub
@@ -777,6 +945,46 @@ Public Class Form1
         Result.AddArguement("--tile_size", Package.TileSize.ToString)
         Result.AddArguement("--cpu", Package.CPUOnly.ToString)
         Return Result.GetArguements
+    End Function
+
+    Private Function MakeSpandrelCommand(SourceFolder As String, DestFolder As String, Package As FormSettings.PythonPackage) As String
+        Dim Result As New ArguementString
+        Result.AddArguement(Quote(Path.Combine(Application.StartupPath, SpandrelRunnerName)))
+        Result.AddArguement(Quote(Package.Model))
+        Result.AddArguement("--input", Quote(SourceFolder))
+        Result.AddArguement("--output", Quote(DestFolder))
+        Result.AddArguement("--tile-size", Package.TileSize.ToString())
+        Result.AddArguement("--cpu", Package.CPUOnly)
+        If LoadedSettings.ExpertSettings.Logging Then Result.AddArguement("--debug")
+        Return Result.GetArguements
+    End Function
+
+    Private Function FindPythonExecutable() As String
+        Dim OverridePath As String = Environment.GetEnvironmentVariable("AUTOCRISPY_PYTHON")
+        If Not String.IsNullOrWhiteSpace(OverridePath) Then
+            OverridePath = OverridePath.Trim().Trim(ControlChars.Quote)
+            If File.Exists(OverridePath) Then Return Path.GetFullPath(OverridePath)
+        End If
+
+        Dim Candidates As New List(Of String) From {
+            Path.Combine(Root, "python.exe"),
+            Path.Combine(Root, "python", "python.exe"),
+            Path.Combine(Application.StartupPath, "python.exe"),
+            Path.Combine(Application.StartupPath, "python", "python.exe")
+        }
+        For Each Candidate As String In Candidates
+            If File.Exists(Candidate) Then Return Candidate
+        Next
+
+        Dim PathEntries As String() = If(Environment.GetEnvironmentVariable("PATH"), "").Split(Path.PathSeparator)
+        For Each PathEntry As String In PathEntries
+            If Not String.IsNullOrWhiteSpace(PathEntry) Then
+                Dim Candidate As String = Path.Combine(PathEntry.Trim().Trim(ControlChars.Quote), "python.exe")
+                If File.Exists(Candidate) Then Return Candidate
+            End If
+        Next
+
+        Return ""
     End Function
 
 #End Region
@@ -990,6 +1198,13 @@ Public Class Form1
         Output += Source.StandardOutput.ReadToEnd
         Output += vbNewLine & vbNewLine
         Output += Source.StandardError.ReadToEnd
+        File.WriteAllText(Filename, Output)
+    End Sub
+
+    Private Sub WriteProcessLog(StartInfo As ProcessStartInfo, StandardOutput As String, StandardError As String, SaveLoc As String)
+        Dim Filename As String = Path.Combine(SaveLoc, "RealPLKSR_" & Now.ToString("yyyy-MM-dd_HH-mm-ss") & ".txt")
+        Dim Output As String = StartInfo.FileName & " " & StartInfo.Arguments & vbNewLine & vbNewLine
+        Output &= StandardOutput & vbNewLine & vbNewLine & StandardError
         File.WriteAllText(Filename, Output)
     End Sub
 

@@ -5,13 +5,15 @@ AutoCrispy has some features.  I'll explain them here.
 
 AutoCrispy will try to detect any Executables it supports on startup.  They can be in the folder with AutoCrispy, or in their own subfolders.  Note that, AutoCrispy only searches one folder deep (that is to say, it doesn't check any folders inside of folders for the Executables).
 
-Autocrispy also searches in these subfolders for Python Scrips and ESRGAN Models.  For ESRGAN Models, AutoCrispy searches down one level further (So, two directorys down).  The intent, is to have a folder for ESRGAN, with the scripts inside it, and a folder with your models inside that (and, if you have the portable build provided, that in the folder with the scripts as well.)
+Autocrispy also searches in these subfolders for Python Scrips and ESRGAN Models.  For ESRGAN Models, AutoCrispy searches down one level further (So, two directorys down).  The intent, is to have a folder for ESRGAN, with the scripts inside it, and a folder with your models inside that (and, if you have the portable build provided, that in the folder with the scripts as well.)  The RealPLKSR backend searches for the exact `4x-PBRify_RPLKSRd_V3.pth` checkpoint in the program/search root and up to two folders below it.
 
 ## Special Notes about Python
 
 AutoCrispy does its best to detect Python installations.  First, it checks for the portable Python build.  Next, it will attempt to read PATH to see if Python is installed somewhere on the system, and if so, gets its path.
 
 Otherwise, AutoCrispy will try to send Python commands directly through the shell (sometimes this works even without PATH set, somehow).  Be aware, that if Python runs commands via the shell, Output Logging will be Disabled, and you will see the Python Interpreter open in your taskbar, minimized.
+
+The Spandrel RealPLKSR runner is separate from the legacy ESRGAN Python bundle.  It needs Python 3.10 or newer with PyTorch, `spandrel==0.4.2`, and Pillow.  It looks for `python.exe` on PATH or beside AutoCrispy; set `AUTOCRISPY_PYTHON` to the full executable path for a custom install.  See [PLKSR_SETUP.md](PLKSR_SETUP.md) for checkpoint and GPU setup.
 
 ## Chains
 
