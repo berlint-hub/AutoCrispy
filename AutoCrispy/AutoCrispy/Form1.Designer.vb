@@ -344,7 +344,7 @@ Partial Class Form1
         'DefringeThresh
         '
         Me.DefringeThresh.Enabled = False
-        Me.DefringeThresh.Location = New System.Drawing.Point(212, 111)
+        Me.DefringeThresh.Location = New System.Drawing.Point(212, 115)
         Me.DefringeThresh.Margin = New System.Windows.Forms.Padding(4, 5, 4, 5)
         Me.DefringeThresh.Maximum = New Decimal(New Integer() {255, 0, 0, 0})
         Me.DefringeThresh.Name = "DefringeThresh"
@@ -355,7 +355,7 @@ Partial Class Form1
         'DefringeCheck
         '
         Me.DefringeCheck.AutoSize = True
-        Me.DefringeCheck.Location = New System.Drawing.Point(9, 112)
+        Me.DefringeCheck.Location = New System.Drawing.Point(9, 116)
         Me.DefringeCheck.Margin = New System.Windows.Forms.Padding(4, 5, 4, 5)
         Me.DefringeCheck.Name = "DefringeCheck"
         Me.DefringeCheck.Size = New System.Drawing.Size(96, 24)
@@ -393,7 +393,7 @@ Partial Class Form1
         '
         'NumericThreads
         '
-        Me.NumericThreads.Location = New System.Drawing.Point(264, 78)
+        Me.NumericThreads.Location = New System.Drawing.Point(264, 82)
         Me.NumericThreads.Margin = New System.Windows.Forms.Padding(4, 5, 4, 5)
         Me.NumericThreads.Maximum = New Decimal(New Integer() {64, 0, 0, 0})
         Me.NumericThreads.Minimum = New Decimal(New Integer() {1, 0, 0, 0})
@@ -407,7 +407,7 @@ Partial Class Form1
         Me.ThreadComboBox.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList
         Me.ThreadComboBox.FormattingEnabled = True
         Me.ThreadComboBox.Items.AddRange(New Object() {"Single", "Custom", "All", "Max (512) (!!)"})
-        Me.ThreadComboBox.Location = New System.Drawing.Point(98, 78)
+        Me.ThreadComboBox.Location = New System.Drawing.Point(98, 82)
         Me.ThreadComboBox.Margin = New System.Windows.Forms.Padding(4, 5, 4, 5)
         Me.ThreadComboBox.Name = "ThreadComboBox"
         Me.ThreadComboBox.Size = New System.Drawing.Size(156, 28)
@@ -427,6 +427,7 @@ Partial Class Form1
         '
         Me.BackendStatusLabel.AutoEllipsis = True
         Me.BackendStatusLabel.ForeColor = System.Drawing.SystemColors.GrayText
+        Me.BackendStatusLabel.Font = New System.Drawing.Font("Microsoft Sans Serif", 7.5!, System.Drawing.FontStyle.Regular)
         Me.BackendStatusLabel.Location = New System.Drawing.Point(14, 59)
         Me.BackendStatusLabel.Name = "BackendStatusLabel"
         Me.BackendStatusLabel.Size = New System.Drawing.Size(310, 16)
@@ -446,7 +447,7 @@ Partial Class Form1
         'Label22
         '
         Me.Label22.AutoSize = True
-        Me.Label22.Location = New System.Drawing.Point(117, 114)
+        Me.Label22.Location = New System.Drawing.Point(117, 118)
         Me.Label22.Margin = New System.Windows.Forms.Padding(4, 0, 4, 0)
         Me.Label22.Name = "Label22"
         Me.Label22.Size = New System.Drawing.Size(83, 20)
@@ -456,7 +457,7 @@ Partial Class Form1
         'Label12
         '
         Me.Label12.AutoSize = True
-        Me.Label12.Location = New System.Drawing.Point(9, 81)
+        Me.Label12.Location = New System.Drawing.Point(9, 85)
         Me.Label12.Margin = New System.Windows.Forms.Padding(4, 0, 4, 0)
         Me.Label12.Name = "Label12"
         Me.Label12.Size = New System.Drawing.Size(71, 20)
