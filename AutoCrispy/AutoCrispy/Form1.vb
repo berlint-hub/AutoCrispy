@@ -10,9 +10,11 @@ Public Class Form1
     Dim Root As String = Application.StartupPath
     Dim AppData As String = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
     Dim WaitScale As Integer = 0
-    Dim SettingsLoc As Point = New Point(240, 166)
+    Dim SettingsLoc As Point = New Point(368, 255)
     Dim LoadedSettings As FormSettings.Settings
     Dim SkipList As New List(Of String)
+    Private LastSelectedSpandrelModelPath As String = ""
+    Private ReadOnly UiToolTip As New ToolTip()
 
     Const HotToggle As String = "%`"
 
@@ -32,7 +34,7 @@ Public Class Form1
     Public Property PyModels As New List(Of String)
     Public Property PLKSRModelPath As String
     Public Property DAT2ModelPath As String
-    Public Property SupportedSpandrelModels As New List(Of String)
+    Private Property SupportedSpandrelModels As New List(Of SpandrelModelInfo)
 
     Private Const PLKSRBackendName As String = "PLKSR"
     Private Const PLKSRCheckpointName As String = "4x-PBRify_RPLKSRd_V3.pth"
@@ -67,12 +69,28 @@ Public Class Form1
         End Sub
     End Structure
 
+    Private Class SpandrelModelInfo
+        Public Property FilePath As String
+        Public Property Architecture As String
+        Public Property Scale As Integer
+        Public Property Purpose As String
+        Public Property InputChannels As Integer
+        Public Property OutputChannels As Integer
+
+        Public ReadOnly Property SelectorText As String
+            Get
+                If Scale <= 0 Then Return Path.GetFileName(FilePath) & " · Spandrel image model"
+                Return Scale.ToString() & "× " & Purpose & " · " & Path.GetFileName(FilePath) & " (" & Architecture & ")"
+            End Get
+        End Property
+    End Class
+
 #End Region
 
 #Region "Loading"
 
     Private Async Sub Form1_Load(sender As Object, e As EventArgs) Handles MyBase.Load
-        Me.Size = New Size(660, 413)
+        Me.ClientSize = New Size(980, 585)
         Me.SetStyle(ControlStyles.OptimizedDoubleBuffer, True)
         Application.CurrentCulture = New Globalization.CultureInfo("EN-US")
         PreloadImageList()
@@ -127,6 +145,7 @@ Public Class Form1
         Else
             File.WriteAllText(AppData & "\AutoCrispy\settings.xml", Serialize(New FormSettings.Settings(Me)))
         End If
+        UiToolTip.Dispose()
     End Sub
 
     Private Sub StartUpCheckEXE()
@@ -222,6 +241,10 @@ Public Class Form1
         SpandrelScanGeneration += 1
         Dim ScanGeneration As Integer = SpandrelScanGeneration
         Dim SelectedBackendBeforeScan As String = If(ExeComboBox.SelectedItem, "").ToString()
+        If String.Equals(SelectedBackendBeforeScan, SpandrelBackendName, StringComparison.OrdinalIgnoreCase) AndAlso
+            PyModel.SelectedIndex >= 0 AndAlso PyModel.SelectedIndex < SupportedSpandrelModels.Count Then
+            LastSelectedSpandrelModelPath = SupportedSpandrelModels(PyModel.SelectedIndex).FilePath
+        End If
 
         If SpandrelScanCancellation IsNot Nothing Then
             Try
@@ -232,6 +255,8 @@ Public Class Form1
             SpandrelScanCancellation = Nothing
         End If
         SupportedSpandrelModels.Clear()
+        RefreshSpandrelModelsButton.Enabled = False
+        SetModelScanStatus("Checking for model folders and Python…")
 
         Dim ModelFolders As New List(Of String)
         For Each ModelFolder As String In FindGenericSpandrelModelFolders(SearchRoot)
@@ -245,12 +270,29 @@ Public Class Form1
 
         Dim PythonExecutable As String = FindPythonExecutable()
         Dim RunnerPath As String = Path.Combine(Application.StartupPath, SpandrelRunnerName)
-        If ModelFolders.Count = 0 OrElse PythonExecutable = "" OrElse Not File.Exists(RunnerPath) Then
-            If ScanGeneration = SpandrelScanGeneration AndAlso Not IsDisposed Then WatchDogButton.Enabled = True
+        Dim SetupProblem As String = ""
+        If ModelFolders.Count = 0 Then
+            SetupProblem = "No models folder found. Add checkpoints to the shared 'models' folder."
+        ElseIf PythonExecutable = "" Then
+            SetupProblem = "Python was not found. See PLKSR_SETUP.md for setup instructions."
+        ElseIf Not File.Exists(RunnerPath) Then
+            SetupProblem = "The Spandrel runner was not found beside AutoCrispy."
+        End If
+        If SetupProblem <> "" Then
+            SetModelScanStatus(SetupProblem)
+            If ScanGeneration = SpandrelScanGeneration AndAlso Not IsDisposed Then
+                WatchDogButton.Enabled = True
+                RefreshSpandrelModelsButton.Enabled = True
+                If String.Equals(If(ExeComboBox.SelectedItem, "").ToString(), SpandrelBackendName, StringComparison.OrdinalIgnoreCase) Then
+                    ConfigurePythonModelSelector(SpandrelBackendName)
+                End If
+            End If
             Return
         End If
 
         WatchDogButton.Enabled = False
+        RefreshSpandrelModelsButton.Enabled = False
+        SetModelScanStatus("Scanning checkpoints for compatible 1× restoration and 4× SR models…")
         Dim DebugEnabled As Boolean = DebugCheckbox.Checked
         Dim ScanCancellation As New CancellationTokenSource()
         SpandrelScanCancellation = ScanCancellation
@@ -259,13 +301,14 @@ Public Class Form1
             Await Task.Delay(250, ScanCancellation.Token)
             If ScanGeneration <> SpandrelScanGeneration Then Return
 
-            Dim FoundModels As List(Of String) = Await Task.Run(
+            Dim FoundModels As List(Of SpandrelModelInfo) = Await Task.Run(
                 Function() ScanSpandrelModelFolders(ModelFolders, PythonExecutable, RunnerPath, DebugEnabled, ScanCancellation.Token),
                 ScanCancellation.Token)
             If ScanGeneration <> SpandrelScanGeneration OrElse ScanCancellation.IsCancellationRequested Then Return
 
             SupportedSpandrelModels = FoundModels
             If SupportedSpandrelModels.Count > 0 Then
+                SetModelScanStatus("Found " & SupportedSpandrelModels.Count.ToString() & " compatible model(s).")
                 AddSpandrelBackends()
                 Dim CurrentBackend As String = If(ExeComboBox.SelectedItem, "").ToString()
                 If String.Equals(CurrentBackend, SelectedBackendBeforeScan, StringComparison.OrdinalIgnoreCase) Then
@@ -276,35 +319,56 @@ Public Class Form1
                     SetSettingsWindow()
                 End If
                 If GetPreferredSpandrelBackendIndex() >= 0 Then ReplaceLegacyUpscalerChain()
+            Else
+                SetModelScanStatus("No compatible checkpoints found (need 1× RGB restoration or 4× RGB SR).")
+                If String.Equals(If(ExeComboBox.SelectedItem, "").ToString(), SpandrelBackendName, StringComparison.OrdinalIgnoreCase) Then
+                    ConfigurePythonModelSelector(SpandrelBackendName)
+                End If
             End If
         Catch ex As OperationCanceledException
             ' A newer folder scan superseded this request.
         Catch ex As Exception
+            If ScanGeneration = SpandrelScanGeneration Then
+                SetModelScanStatus("Model scan failed: " & ex.GetBaseException().Message)
+            End If
             If DebugEnabled Then System.Diagnostics.Debug.WriteLine("Spandrel model scan failed: " & ex.Message)
         Finally
             If ScanGeneration = SpandrelScanGeneration Then
                 SpandrelScanCancellation = Nothing
                 If Not IsDisposed Then WatchDogButton.Enabled = True
+                If Not IsDisposed Then RefreshSpandrelModelsButton.Enabled = True
             End If
             ScanCancellation.Dispose()
         End Try
     End Function
 
-    Private Function ScanSpandrelModelFolders(ModelFolders As List(Of String), PythonExecutable As String, RunnerPath As String, DebugEnabled As Boolean, ScanToken As CancellationToken) As List(Of String)
-        Dim Result As New List(Of String)
+    Private Sub SetModelScanStatus(Message As String)
+        If IsDisposed OrElse SpandrelScanStatusLabel Is Nothing Then Return
+        SpandrelScanStatusLabel.Text = Message
+        BackendStatusLabel.Text = "Spandrel: " & Message
+        UiToolTip.SetToolTip(SpandrelScanStatusLabel, Message)
+        UiToolTip.SetToolTip(BackendStatusLabel, Message)
+        If Not WorkHorse.IsBusy Then
+            QueueActivityLabel.Text = Message
+            UiToolTip.SetToolTip(QueueActivityLabel, Message)
+        End If
+    End Sub
+
+    Private Function ScanSpandrelModelFolders(ModelFolders As List(Of String), PythonExecutable As String, RunnerPath As String, DebugEnabled As Boolean, ScanToken As CancellationToken) As List(Of SpandrelModelInfo)
+        Dim Result As New List(Of SpandrelModelInfo)
         Dim SeenModels As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
         For Each ModelFolder As String In ModelFolders
             ScanToken.ThrowIfCancellationRequested()
-            Dim Models As List(Of String) = ScanSpandrelModelFolder(ModelFolder, PythonExecutable, RunnerPath, DebugEnabled, ScanToken)
-            For Each ModelPath As String In Models
-                If SeenModels.Add(ModelPath) Then Result.Add(ModelPath)
+            Dim Models As List(Of SpandrelModelInfo) = ScanSpandrelModelFolder(ModelFolder, PythonExecutable, RunnerPath, DebugEnabled, ScanToken)
+            For Each Model As SpandrelModelInfo In Models
+                If SeenModels.Add(Model.FilePath) Then Result.Add(Model)
             Next
         Next
         Return Result
     End Function
 
-    Private Function ScanSpandrelModelFolder(ModelFolder As String, PythonExecutable As String, RunnerPath As String, DebugEnabled As Boolean, ScanToken As CancellationToken) As List(Of String)
-        Dim Result As New List(Of String)
+    Private Function ScanSpandrelModelFolder(ModelFolder As String, PythonExecutable As String, RunnerPath As String, DebugEnabled As Boolean, ScanToken As CancellationToken) As List(Of SpandrelModelInfo)
+        Dim Result As New List(Of SpandrelModelInfo)
         Try
             Dim ScanInfo As New ProcessStartInfo(PythonExecutable, MakeSpandrelListCommand(RunnerPath, ModelFolder, DebugEnabled))
             ScanInfo.WorkingDirectory = Application.StartupPath
@@ -338,9 +402,29 @@ Public Class Form1
                     For Each OutputLine As String In StandardOutput.Split(New String() {vbCrLf, vbLf}, StringSplitOptions.RemoveEmptyEntries)
                         If OutputLine.StartsWith("MODEL:", StringComparison.Ordinal) Then
                             Try
-                                Dim EncodedPath As String = OutputLine.Substring("MODEL:".Length)
-                                Dim ModelPath As String = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(EncodedPath))
-                                If File.Exists(ModelPath) AndAlso SeenModels.Add(ModelPath) Then Result.Add(ModelPath)
+                                Dim ModelFields As String() = OutputLine.Substring("MODEL:".Length).Split(ControlChars.Tab)
+                                Dim ModelPath As String = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(ModelFields(0)))
+                                If File.Exists(ModelPath) AndAlso SeenModels.Add(ModelPath) Then
+                                    Dim Model As New SpandrelModelInfo With {
+                                        .FilePath = ModelPath,
+                                        .Architecture = "Unknown",
+                                        .Purpose = "Image model"
+                                    }
+                                    If ModelFields.Length >= 6 Then
+                                        Model.Architecture = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(ModelFields(1)))
+                                        Dim ModelScale As Integer = 0
+                                        Integer.TryParse(ModelFields(2), ModelScale)
+                                        Model.Scale = ModelScale
+                                        Model.Purpose = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(ModelFields(3)))
+                                        Dim InputChannels As Integer = 0
+                                        Dim OutputChannels As Integer = 0
+                                        Integer.TryParse(ModelFields(4), InputChannels)
+                                        Integer.TryParse(ModelFields(5), OutputChannels)
+                                        Model.InputChannels = InputChannels
+                                        Model.OutputChannels = OutputChannels
+                                    End If
+                                    Result.Add(Model)
+                                End If
                             Catch ex As Exception
                                 If DebugEnabled Then System.Diagnostics.Debug.WriteLine("Invalid Spandrel model scan result: " & ex.Message)
                             End Try
@@ -388,13 +472,18 @@ Public Class Form1
     End Function
 
     Private Function GetPreferredSpandrelModelIndex() As Integer
+        If LastSelectedSpandrelModelPath <> "" Then
+            For i As Integer = 0 To SupportedSpandrelModels.Count - 1
+                If String.Equals(SupportedSpandrelModels(i).FilePath, LastSelectedSpandrelModelPath, StringComparison.OrdinalIgnoreCase) Then Return i
+            Next
+        End If
         For i As Integer = 0 To SupportedSpandrelModels.Count - 1
-            If Path.GetFileName(SupportedSpandrelModels(i)).Equals(PLKSRCheckpointName, StringComparison.OrdinalIgnoreCase) Then
+            If Path.GetFileName(SupportedSpandrelModels(i).FilePath).Equals(PLKSRCheckpointName, StringComparison.OrdinalIgnoreCase) Then
                 Return i
             End If
         Next
         For i As Integer = 0 To SupportedSpandrelModels.Count - 1
-            If Path.GetFileName(SupportedSpandrelModels(i)).Equals(DAT2CheckpointName, StringComparison.OrdinalIgnoreCase) Then
+            If Path.GetFileName(SupportedSpandrelModels(i).FilePath).Equals(DAT2CheckpointName, StringComparison.OrdinalIgnoreCase) Then
                 Return i
             End If
         Next
@@ -403,11 +492,11 @@ Public Class Form1
     End Function
 
     Private Function GetPreferredPBRifyModelPath() As String
-        For Each ModelPath As String In SupportedSpandrelModels
-            If Path.GetFileName(ModelPath).Equals(PLKSRCheckpointName, StringComparison.OrdinalIgnoreCase) Then Return ModelPath
+        For Each Model As SpandrelModelInfo In SupportedSpandrelModels
+            If Path.GetFileName(Model.FilePath).Equals(PLKSRCheckpointName, StringComparison.OrdinalIgnoreCase) Then Return Model.FilePath
         Next
-        For Each ModelPath As String In SupportedSpandrelModels
-            If Path.GetFileName(ModelPath).Equals(DAT2CheckpointName, StringComparison.OrdinalIgnoreCase) Then Return ModelPath
+        For Each Model As SpandrelModelInfo In SupportedSpandrelModels
+            If Path.GetFileName(Model.FilePath).Equals(DAT2CheckpointName, StringComparison.OrdinalIgnoreCase) Then Return Model.FilePath
         Next
         Return ""
     End Function
@@ -420,7 +509,7 @@ Public Class Form1
                 Return DAT2ModelPath
             Case SpandrelBackendName
                 If PyModel.SelectedIndex >= 0 AndAlso PyModel.SelectedIndex < SupportedSpandrelModels.Count Then
-                    Return SupportedSpandrelModels(PyModel.SelectedIndex)
+                    Return SupportedSpandrelModels(PyModel.SelectedIndex).FilePath
                 End If
         End Select
         Return ""
@@ -603,6 +692,7 @@ Public Class Form1
                         Dim TempPath As String = Path.GetTempPath & "Single_0"
                         Directory.CreateDirectory(Path.GetTempPath & "Single_0")
                         File.Copy(OFD.FileName, TempPath & "\" & Path.GetFileName(SFD.FileName), True)
+                        QueueActivityLabel.Text = "Starting one-off image run…"
                         LoadedSettings = New FormSettings.Settings(Me)
                         LoadedSettings.Paths = New FormSettings.ProgramPaths(TempPath, Directory.GetParent(SFD.FileName).FullName, Root)
                         If ChainControl.ListItems.Count = 0 Then
@@ -622,6 +712,7 @@ Public Class Form1
             WatchDog.Stop()
             WatchDogButton.Enabled = False
             WatchDogButton.Text = "Stopping..."
+            QueueActivityLabel.Text = "Stopping active processing…"
             WorkHorse.CancelAsync()
             StopActiveProcesses()
             Return
@@ -634,6 +725,7 @@ Public Class Form1
 
         WatchDog.Enabled = Not WatchDog.Enabled
         WatchDogButton.Text = "Running: " & WatchDog.Enabled
+        QueueActivityLabel.Text = If(WatchDog.Enabled, "Watching for new textures…", "Watcher stopped")
         SwitchGroups(Not WatchDog.Enabled)
     End Sub
 
@@ -704,20 +796,25 @@ Public Class Form1
             Case "ESRGAN"
                 ConfigurePythonModelSelector("ESRGAN")
                 PyGroup.Text = "ESRGAN"
+                TileSizeHint.Text = "0 = no tiling; the full image must fit in available memory."
                 MoveShowGroup(PyGroup)
             Case PLKSRBackendName
                 ConfigurePythonModelSelector(PLKSRBackendName)
                 PyGroup.Text = "PLKSR"
+                TileSizeHint.Text = "0 tries full-image inference, then falls back to smaller tiles on GPU memory errors."
                 MoveShowGroup(PyGroup)
             Case DAT2BackendName
                 ConfigurePythonModelSelector(DAT2BackendName)
                 PyGroup.Text = "PBRify DAT2"
+                TileSizeHint.Text = "0 tries full-image inference, then falls back to smaller tiles on GPU memory errors."
                 MoveShowGroup(PyGroup)
             Case SpandrelBackendName
                 ConfigurePythonModelSelector(SpandrelBackendName)
                 PyGroup.Text = "Spandrel"
+                TileSizeHint.Text = "0 tries full-image inference, then falls back to smaller tiles on GPU memory errors."
                 MoveShowGroup(PyGroup)
         End Select
+        UpdateSpandrelModelInfo()
     End Sub
 
     Private Sub ConfigurePythonModelSelector(BackendName As String)
@@ -731,12 +828,12 @@ Public Class Form1
             End If
             PyModel.Enabled = False
         ElseIf BackendName = SpandrelBackendName Then
-            For Each ModelPath As String In SupportedSpandrelModels
-                PyModel.Items.Add(Path.GetFileName(ModelPath))
+            For Each Model As SpandrelModelInfo In SupportedSpandrelModels
+                PyModel.Items.Add(Model.SelectorText)
             Next
             Dim PreferredModelIndex As Integer = GetPreferredSpandrelModelIndex()
             If PreferredModelIndex >= 0 Then PyModel.SelectedIndex = PreferredModelIndex
-            PyModel.Enabled = True
+            PyModel.Enabled = (PreferredModelIndex >= 0)
         Else
             For Each ModelPath As String In PyModels
                 PyModel.Items.Add(Path.GetFileName(ModelPath))
@@ -745,6 +842,44 @@ Public Class Form1
             PyModel.Enabled = True
         End If
         PyModel.EndUpdate()
+        UpdateSpandrelModelInfo()
+    End Sub
+
+    Private Sub UpdateSpandrelModelInfo()
+        Dim IsSpandrelSelected As Boolean = String.Equals(If(ExeComboBox.SelectedItem, "").ToString(), SpandrelBackendName, StringComparison.OrdinalIgnoreCase)
+        SpandrelModelInfoLabel.Visible = IsSpandrelSelected
+        SpandrelScanStatusLabel.Visible = IsSpandrelSelected
+        RefreshSpandrelModelsButton.Visible = IsSpandrelSelected
+        If Not IsSpandrelSelected Then Return
+
+        If PyModel.SelectedIndex < 0 OrElse PyModel.SelectedIndex >= SupportedSpandrelModels.Count Then
+            SpandrelModelInfoLabel.Text = "No compatible model is selected. Refresh the scan or check your setup."
+            UiToolTip.SetToolTip(SpandrelModelInfoLabel, "")
+            Return
+        End If
+
+        Dim Model As SpandrelModelInfo = SupportedSpandrelModels(PyModel.SelectedIndex)
+        If Model.Scale > 0 Then
+            Dim ScaleDescription As String = If(Model.Scale = 1, "preserves image dimensions", "enlarges " & Model.Scale.ToString() & "×")
+            SpandrelModelInfoLabel.Text = "Architecture: " & Model.Architecture & " · " & Model.Scale.ToString() & "× " & Model.Purpose &
+                " · RGB " & Model.InputChannels.ToString() & "→" & Model.OutputChannels.ToString() & " · " & ScaleDescription
+        Else
+            SpandrelModelInfoLabel.Text = "Architecture: " & Model.Architecture & " · Spandrel-compatible image model"
+        End If
+        UiToolTip.SetToolTip(SpandrelModelInfoLabel, Model.FilePath)
+        UiToolTip.SetToolTip(PyModel, Model.FilePath)
+    End Sub
+
+    Private Sub PyModel_SelectedIndexChanged(sender As Object, e As EventArgs) Handles PyModel.SelectedIndexChanged
+        If String.Equals(If(ExeComboBox.SelectedItem, "").ToString(), SpandrelBackendName, StringComparison.OrdinalIgnoreCase) AndAlso
+            PyModel.SelectedIndex >= 0 AndAlso PyModel.SelectedIndex < SupportedSpandrelModels.Count Then
+            LastSelectedSpandrelModelPath = SupportedSpandrelModels(PyModel.SelectedIndex).FilePath
+        End If
+        UpdateSpandrelModelInfo()
+    End Sub
+
+    Private Async Sub RefreshSpandrelModelsButton_Click(sender As Object, e As EventArgs) Handles RefreshSpandrelModelsButton.Click
+        Await RefreshSupportedSpandrelModels(Root)
     End Sub
 
     Public Function GetSelectedUpscaleModel() As String
@@ -782,9 +917,11 @@ Public Class Form1
         Dim Source = Directory.GetFiles(InputTextBox.Text, "*.*", SearchOption.AllDirectories).Count
         Dim FileCheck = GetMissingFiles(InputTextBox.Text, OutputTextBox.Text).Count
         If Source = 0 OrElse FileCheck = 0 Then
+            QueueActivityLabel.Text = "Watching for new textures…"
             WaitScale = Math.Min(WaitScale + 1, 100)
             WatchDog.Interval = 1000 + (WaitScale * 590)
         Else
+            QueueActivityLabel.Text = "Starting next batch…"
             WaitScale = 0
             WatchDog.Interval = 1000
             LoadedSettings = New FormSettings.Settings(Me)
@@ -800,28 +937,50 @@ Public Class Form1
     ' Match by basename so format conversions (for example PNG input to DDS output) count as done.
     Private Sub ProgressPollTimer_Tick(sender As Object, e As EventArgs) Handles ProgressPollTimer.Tick
         Try
-            Dim Percent As Integer = GetOverallProgress()
+            Dim DoneCount As Integer = 0
+            Dim TotalCount As Integer = 0
+            Dim Percent As Integer = GetOverallProgress(DoneCount, TotalCount)
             If Percent < UpscaleProgress.Minimum Then Percent = UpscaleProgress.Minimum
             If Percent > UpscaleProgress.Maximum Then Percent = UpscaleProgress.Maximum
             UpscaleProgress.Value = Percent
+            QueueSummaryLabel.Text = DoneCount.ToString() & " / " & TotalCount.ToString() & " textures complete (" & Percent.ToString() & "%)"
+
+            If Not WorkHorse.IsBusy AndAlso RefreshSpandrelModelsButton.Enabled Then
+                If WatchDog.Enabled Then
+                    If TotalCount = 0 OrElse DoneCount >= TotalCount Then
+                        QueueActivityLabel.Text = "Watching for new textures…"
+                    Else
+                        QueueActivityLabel.Text = "Watching · " & (TotalCount - DoneCount).ToString() & " remaining"
+                    End If
+                ElseIf TotalCount = 0 Then
+                    QueueActivityLabel.Text = "Ready"
+                ElseIf DoneCount >= TotalCount Then
+                    QueueActivityLabel.Text = "Complete"
+                Else
+                    QueueActivityLabel.Text = "Paused · " & (TotalCount - DoneCount).ToString() & " remaining"
+                End If
+            End If
         Catch ex As Exception
             ' A removable or network-backed input/output folder can disappear during a scan.
         End Try
         ProgressPollTimer.Interval = If(WorkHorse.IsBusy, 1000, 5000)
     End Sub
 
-    Private Function GetOverallProgress() As Integer
+    Private Function GetOverallProgress(ByRef DoneCount As Integer, ByRef TotalCount As Integer) As Integer
+        DoneCount = 0
+        TotalCount = 0
         Dim InputPath As String = InputTextBox.Text
         Dim OutputPath As String = OutputTextBox.Text
         If Not Directory.Exists(InputPath) OrElse Not Directory.Exists(OutputPath) Then Return 0
 
         Dim InputFiles As String() = Directory.GetFiles(InputPath, "*.*", SearchOption.AllDirectories)
-        If InputFiles.Length = 0 Then Return 0
+        TotalCount = InputFiles.Length
+        If TotalCount = 0 Then Return 0
 
-        Dim Done As Integer = InputFiles.Length - GetMissingFiles(InputFiles, OutputPath).Length
-        If Done <= 0 Then Return 0
-        If Done >= InputFiles.Length Then Return 100
-        Return CInt(Math.Floor((Done * 100.0) / InputFiles.Length))
+        DoneCount = TotalCount - GetMissingFiles(InputFiles, OutputPath).Length
+        If DoneCount <= 0 Then Return 0
+        If DoneCount >= TotalCount Then Return 100
+        Return CInt(Math.Floor((DoneCount * 100.0) / TotalCount))
     End Function
 
     Private Sub WorkHorse_DoWork(sender As Object, e As System.ComponentModel.DoWorkEventArgs) Handles WorkHorse.DoWork
@@ -833,6 +992,12 @@ Public Class Form1
     End Sub
 
     Private Sub WorkHorse_ProgressChanged(sender As Object, e As System.ComponentModel.ProgressChangedEventArgs) Handles WorkHorse.ProgressChanged
+        If TypeOf e.UserState Is String Then
+            QueueActivityLabel.Text = CStr(e.UserState)
+            UiToolTip.SetToolTip(QueueActivityLabel, CStr(e.UserState))
+            Return
+        End If
+
         ' The timer owns the progress bar; this event still triggers the texture-reload hotkey.
         If (HotKeyCheckbox.Checked = True) AndAlso (GetActiveWindow <> Me.Handle) Then
             SendKeys.Send(HotToggle)
@@ -852,6 +1017,7 @@ Public Class Form1
             SwitchGroups(True)
             WatchDogButton.Enabled = True
             SkipList.Clear()
+            QueueActivityLabel.Text = "Cancelled"
             Dim SingleRunPath As String = Path.Combine(Path.GetTempPath(), "Single_0")
             If Directory.Exists(SingleRunPath) Then Directory.Delete(SingleRunPath, True)
             Exit Sub
@@ -863,14 +1029,18 @@ Public Class Form1
             WatchDogButton.Enabled = True
             SwitchGroups(True)
             SkipList.Clear()
+            QueueActivityLabel.Text = "Failed — see error details"
+            UiToolTip.SetToolTip(QueueActivityLabel, e.Error.GetBaseException().Message)
             Dim SingleRunPath As String = Path.Combine(Path.GetTempPath(), "Single_0")
             If Directory.Exists(SingleRunPath) Then Directory.Delete(SingleRunPath, True)
             MessageBox.Show("Upscaling failed: " & e.Error.GetBaseException().Message, "AutoCrispy error", MessageBoxButtons.OK, MessageBoxIcon.Error)
             Exit Sub
         End If
         If WatchDogButton.Text = "Running: True" Then
+            QueueActivityLabel.Text = "Watching for new textures…"
             WatchDog.Start()
         Else
+            QueueActivityLabel.Text = "One-off run complete"
             WatchDog.Stop()
             WatchDog.Enabled = False
             WatchDogButton.Text = "Running: False"
@@ -916,11 +1086,22 @@ Public Class Form1
                 CleanupUpscaleTemporaryFolders()
                 Return
             End If
+            Dim BatchFiles As String() = Directory.GetFiles(TempPath)
+            Array.Sort(BatchFiles, StringComparer.OrdinalIgnoreCase)
+            Dim BatchDescription As String = "no images matched the current alpha settings"
+            If BatchFiles.Length > 0 Then
+                BatchDescription = Path.GetFileName(BatchFiles(0))
+                If BatchFiles.Length > 1 Then BatchDescription &= " (+" & (BatchFiles.Length - 1).ToString() & " more)"
+            End If
+            WorkHorse.ReportProgress(0, "Prepared " & BatchFiles.Length.ToString() & " texture(s): " & BatchDescription)
+            Dim StageIndex As Integer = 0
             For Each Model In ChainList
+                StageIndex += 1
                 If WorkHorse.CancellationPending Then
                     CleanupUpscaleTemporaryFolders()
                     Return
                 End If
+                WorkHorse.ReportProgress(0, "Step " & StageIndex.ToString() & "/" & ChainList.Count.ToString() & " · " & Model.Name & " · " & BatchDescription)
                 Dim NewImages As New List(Of String)
                 Dim DiffImages = GetMissingFiles(ChainPaths(0), LoadedSettings.Paths.OutputPath)
                 For Each NewImage As String In DiffImages

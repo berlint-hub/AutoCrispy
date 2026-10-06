@@ -127,11 +127,13 @@ class SpandrelRunnerTests(unittest.TestCase):
 
             self.assertEqual(result, 0)
             emitted = []
+            details_by_path = {}
             for line in output.getvalue().splitlines():
                 self.assertTrue(line.startswith("MODEL:"))
-                emitted.append(
-                    base64.b64decode(line.removeprefix("MODEL:")).decode("utf-8")
-                )
+                model_fields = line.removeprefix("MODEL:").split("\t")
+                model_path = base64.b64decode(model_fields[0]).decode("utf-8")
+                emitted.append(model_path)
+                details_by_path[model_path] = model_fields[1:]
             self.assertEqual(
                 emitted,
                 [
@@ -142,6 +144,11 @@ class SpandrelRunnerTests(unittest.TestCase):
                     str(files["valid.pth"].resolve()),
                 ],
             )
+            dxt_details = details_by_path[str(files["1x-DXTDecompressor-Source-V3.pth"].resolve())]
+            self.assertEqual(base64.b64decode(dxt_details[0]).decode("utf-8"), "ESRGAN")
+            self.assertEqual(dxt_details[1], "1")
+            self.assertEqual(base64.b64decode(dxt_details[2]).decode("utf-8"), "Restoration")
+            self.assertEqual(dxt_details[3:], ["3", "3"])
 
     def test_listing_requires_an_existing_model_folder(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

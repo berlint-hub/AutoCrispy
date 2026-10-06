@@ -368,7 +368,22 @@ def list_supported_models(model_root: Path, debug: bool = False) -> int:
                 encoded_path = base64.b64encode(
                     str(checkpoint.resolve()).encode("utf-8")
                 ).decode("ascii")
-                print(f"MODEL:{encoded_path}", flush=True)
+                encoded_architecture = base64.b64encode(
+                    str(descriptor.architecture.id).encode("utf-8")
+                ).decode("ascii")
+                encoded_purpose = base64.b64encode(
+                    str(descriptor.purpose).encode("utf-8")
+                ).decode("ascii")
+                metadata = "\t".join(
+                    (
+                        encoded_architecture,
+                        str(descriptor.scale),
+                        encoded_purpose,
+                        str(descriptor.input_channels),
+                        str(descriptor.output_channels),
+                    )
+                )
+                print(f"MODEL:{encoded_path}\t{metadata}", flush=True)
         except Exception as error:
             if debug:
                 print(f"Skipping {checkpoint.name}: {error}", file=sys.stderr)
