@@ -919,7 +919,7 @@ Partial Class Form1
         Me.TileSizeHint.AutoSize = False
         Me.TileSizeHint.AutoEllipsis = False
         Me.TileSizeHint.ForeColor = System.Drawing.SystemColors.GrayText
-        Me.TileSizeHint.Location = New System.Drawing.Point(9, 177)
+        Me.TileSizeHint.Location = New System.Drawing.Point(9, 170)
         Me.TileSizeHint.Margin = New System.Windows.Forms.Padding(4, 0, 4, 0)
         Me.TileSizeHint.Name = "TileSizeHint"
         Me.TileSizeHint.Size = New System.Drawing.Size(570, 36)
