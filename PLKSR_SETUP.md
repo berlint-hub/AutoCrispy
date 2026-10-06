@@ -38,6 +38,6 @@ Spandrel 0.4.2 includes PLKSR and RealPLKSR DySample checkpoint detection. If CU
 2. A saved chain entry using the exact legacy model `4x_gameai_2.0` is upgraded to **PLKSR 4x** automatically. Other ESRGAN chains are left alone. If your chain is empty or still uses another model, add **PLKSR 4x** from the chain tab and remove the old upscaler if appropriate. The model is intentionally fixed to this one checkpoint.
 3. Start the watcher as usual. The runner loads the checkpoint once per batch, then processes the new textures.
 
-The existing tile-size setting controls the maximum inference tile size. Start at `512`; increase it for fewer tiles/faster processing if there is enough GPU memory, or lower it if inference runs out of memory. CUDA out-of-memory errors trigger smaller-tile retries automatically. The CPU checkbox forces CPU inference.
+The existing tile-size setting controls the maximum inference tile size. Start at `512`; increase it for fewer tiles/faster processing if there is enough GPU memory, or lower it if inference runs out of memory. Set it to `0` to try processing each image without tiling; if that runs out of memory, AutoCrispy retries with 512-pixel tiles and then smaller tiles automatically. The CPU checkbox forces CPU inference.
 
 The checkpoint is an RGB 4x upscaler, not a normal/roughness/AO generator. If an input has transparency, the runner upscales RGB with RealPLKSR and resizes its alpha channel separately with Lanczos. Use AutoCrispy's existing alpha/defringe settings as needed.

@@ -95,6 +95,9 @@ Public Class Form1
         End If
         ChainControl.DrawList(ChainControl.ListItems)
         WatchDogButton.Select()
+        ' Show the current input/output completion immediately, then keep it refreshed.
+        ProgressPollTimer.Enabled = True
+        ProgressPollTimer_Tick(ProgressPollTimer, EventArgs.Empty)
         If Environment.GetCommandLineArgs.Count > 1 Then
             WatchDogButton_Click(sender, e)
         End If
@@ -362,6 +365,7 @@ Public Class Form1
                             AddModelToChain(ExeComboBox.SelectedItem, False)
                         End If
                         SwitchGroups(False)
+                        ProgressPollTimer.Interval = 1000
                         WorkHorse.RunWorkerAsync()
                     End If
                 End Using
@@ -520,9 +524,38 @@ Public Class Form1
             If ChainControl.ListItems.Count = 0 Then
                 AddModelToChain(ExeComboBox.SelectedItem, False)
             End If
+            ProgressPollTimer.Interval = 1000
             WorkHorse.RunWorkerAsync()
         End If
     End Sub
+
+    ' Progress is overall completion: inputs with matching output files divided by all inputs.
+    ' Match by basename so format conversions (for example PNG input to DDS output) count as done.
+    Private Sub ProgressPollTimer_Tick(sender As Object, e As EventArgs) Handles ProgressPollTimer.Tick
+        Try
+            Dim Percent As Integer = GetOverallProgress()
+            If Percent < UpscaleProgress.Minimum Then Percent = UpscaleProgress.Minimum
+            If Percent > UpscaleProgress.Maximum Then Percent = UpscaleProgress.Maximum
+            UpscaleProgress.Value = Percent
+        Catch ex As Exception
+            ' A removable or network-backed input/output folder can disappear during a scan.
+        End Try
+        ProgressPollTimer.Interval = If(WorkHorse.IsBusy, 1000, 5000)
+    End Sub
+
+    Private Function GetOverallProgress() As Integer
+        Dim InputPath As String = InputTextBox.Text
+        Dim OutputPath As String = OutputTextBox.Text
+        If Not Directory.Exists(InputPath) OrElse Not Directory.Exists(OutputPath) Then Return 0
+
+        Dim InputFiles As String() = Directory.GetFiles(InputPath, "*.*", SearchOption.AllDirectories)
+        If InputFiles.Length = 0 Then Return 0
+
+        Dim Done As Integer = InputFiles.Length - GetMissingFiles(InputFiles, OutputPath).Length
+        If Done <= 0 Then Return 0
+        If Done >= InputFiles.Length Then Return 100
+        Return CInt(Math.Floor((Done * 100.0) / InputFiles.Length))
+    End Function
 
     Private Sub WorkHorse_DoWork(sender As Object, e As System.ComponentModel.DoWorkEventArgs) Handles WorkHorse.DoWork
         WatchDog.Stop()
@@ -533,7 +566,7 @@ Public Class Form1
     End Sub
 
     Private Sub WorkHorse_ProgressChanged(sender As Object, e As System.ComponentModel.ProgressChangedEventArgs) Handles WorkHorse.ProgressChanged
-        UpscaleProgress.Value = e.ProgressPercentage
+        ' The timer owns the progress bar; this event still triggers the texture-reload hotkey.
         If (HotKeyCheckbox.Checked = True) AndAlso (GetActiveWindow <> Me.Handle) Then
             SendKeys.Send(HotToggle)
             Threading.Thread.Sleep(200)
@@ -542,7 +575,6 @@ Public Class Form1
     End Sub
 
     Private Sub WorkHorse_RunWorkerCompleted(sender As Object, e As System.ComponentModel.RunWorkerCompletedEventArgs) Handles WorkHorse.RunWorkerCompleted
-        UpscaleProgress.Value = 0
         If ChainControl.ListItems.Count = 0 Then
             ChainList.Clear()
         End If
@@ -652,7 +684,11 @@ Public Class Form1
             For Each ChainDir As String In DeletedChainPaths
                 Directory.Delete(ChainDir, True)
             Next
-            WorkHorse.ReportProgress(Math.Floor(((i * 100) + 1) / Source.Count))
+
+            ' Keep BackgroundWorker progress within its valid range; the progress poller reads
+            ' overall completion from the input/output folders instead of this batch percentage.
+            Dim ProgressPercentage As Integer = CInt(Math.Floor(((i + ThreadCount) * 100.0) / Source.Count))
+            WorkHorse.ReportProgress(Math.Max(0, Math.Min(100, ProgressPercentage)))
         Next
         If CleanupCheckBox.Checked = True Then
             For Each SourceImage As String In Source
@@ -1141,18 +1177,21 @@ Public Class Form1
     Private Declare Function GetActiveWindow Lib "user32" Alias "GetActiveWindow" () As IntPtr
 
     Private Function GetMissingFiles(Path1 As String, Path2 As String) As String()
+        If Not Directory.Exists(Path1) Then Return New String() {}
+        Return GetMissingFiles(Directory.GetFiles(Path1, "*.*", SearchOption.AllDirectories), Path2)
+    End Function
+
+    Private Function GetMissingFiles(InputFiles As String(), Path2 As String) As String()
+        Dim DoneNames As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+        If Directory.Exists(Path2) Then
+            For Each DoneFile As String In Directory.GetFiles(Path2, "*.*", SearchOption.AllDirectories)
+                DoneNames.Add(Path.GetFileNameWithoutExtension(DoneFile))
+            Next
+        End If
+
         Dim Result As New List(Of String)
-        Dim Path1MasterList = Directory.GetFiles(Path1, "*.*", SearchOption.AllDirectories)
-        Dim Path1List = Directory.GetFiles(Path1, "*.*", SearchOption.AllDirectories).ToList
-        Dim Path2List = Directory.GetFiles(Path2, "*.*", SearchOption.AllDirectories).ToList
-        For i = 0 To Path1List.Count - 1
-            Path1List(i) = Path.GetFileNameWithoutExtension(Path1List(i)).ToLower
-        Next
-        For i = 0 To Path2List.Count - 1
-            Path2List(i) = Path.GetFileNameWithoutExtension(Path2List(i)).ToLower
-        Next
-        For i = 0 To Path1List.Count - 1
-            If Not Path2List.Contains(Path1List(i)) Then Result.Add(Path1MasterList(i))
+        For Each InputFile As String In InputFiles
+            If Not DoneNames.Contains(Path.GetFileNameWithoutExtension(InputFile)) Then Result.Add(InputFile)
         Next
         Return Result.ToArray
     End Function

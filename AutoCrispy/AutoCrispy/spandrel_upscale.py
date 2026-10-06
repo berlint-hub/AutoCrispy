@@ -40,7 +40,7 @@ def parse_args() -> argparse.Namespace:
         "--tile-size",
         type=int,
         default=512,
-        help="Maximum input tile edge in pixels (default: 512)",
+        help="Maximum input tile edge in pixels (default: 512; 0 tries full-image inference)",
     )
     parser.add_argument(
         "--cpu", action="store_true", help="Force CPU inference instead of CUDA"
@@ -172,18 +172,28 @@ def _upscale_with_fallback(
 ) -> Any:
     import torch
 
-    current_tile_size = max(64, tile_size)
+    if tile_size < 0:
+        raise ValueError("Tile size must be zero (untiled) or a positive number of pixels.")
+
+    # Zero means try the full image first. If that does not fit in memory,
+    # switch to tiled inference and keep reducing the tile size on OOM.
+    current_tile_size = 0 if tile_size == 0 else max(64, tile_size)
     while True:
         try:
             return _upscale_rgb(image, model, device, dtype, current_tile_size)
         except RuntimeError as error:
-            if not _is_out_of_memory(error) or current_tile_size <= 64:
+            if not _is_out_of_memory(error):
                 raise
-            current_tile_size = max(64, current_tile_size // 2)
+            if current_tile_size == 0:
+                current_tile_size = 512
+            elif current_tile_size <= 64:
+                raise
+            else:
+                current_tile_size = max(64, current_tile_size // 2)
             if device.type == "cuda":
                 torch.cuda.empty_cache()
             print(
-                f"GPU memory was insufficient; retrying with {current_tile_size}px tiles.",
+                f"Not enough memory; retrying with {current_tile_size}px tiles.",
                 file=sys.stderr,
             )
 
