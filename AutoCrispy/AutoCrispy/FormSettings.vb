@@ -243,6 +243,8 @@
                     Package = New PythonPackage(Source.GetSelectedUpscaleModel(), Source.PyTileSize.Value, Source.PyCPU.Checked)
                 Case "RealPLKSR"
                     Package = New PythonPackage(Source.GetSelectedUpscaleModel(), Source.PyTileSize.Value, Source.PyCPU.Checked, True)
+                Case "DAT2"
+                    Package = New PythonPackage(Source.GetSelectedUpscaleModel(), Source.PyTileSize.Value, Source.PyCPU.Checked, True)
             End Select
         End Sub
     End Structure

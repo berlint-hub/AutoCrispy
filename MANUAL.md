@@ -5,7 +5,7 @@ AutoCrispy has some features.  I'll explain them here.
 
 AutoCrispy will try to detect any Executables it supports on startup.  They can be in the folder with AutoCrispy, or in their own subfolders.  Note that, AutoCrispy only searches one folder deep (that is to say, it doesn't check any folders inside of folders for the Executables).
 
-Autocrispy also searches in these subfolders for Python Scrips and ESRGAN Models.  For ESRGAN Models, AutoCrispy searches down one level further (So, two directorys down).  The intent, is to have a folder for ESRGAN, with the scripts inside it, and a folder with your models inside that (and, if you have the portable build provided, that in the folder with the scripts as well.)  The PLKSR backend searches the program/configured backend roots for the exact `4x-PBRify_RPLKSRd_V3.pth` checkpoint, including nested folders.
+AutoCrispy also searches in these subfolders for Python scripts and ESRGAN models. For ESRGAN models, it searches two directory levels down. The Spandrel backends search the program/configured backend roots for the exact PLKSR V3 and DAT2 V4 checkpoint names, including nested folders.
 
 ## Special Notes about Python
 
@@ -13,7 +13,7 @@ AutoCrispy does its best to detect Python installations.  First, it checks for t
 
 Otherwise, AutoCrispy will try to send Python commands directly through the shell (sometimes this works even without PATH set, somehow).  Be aware, that if Python runs commands via the shell, Output Logging will be Disabled, and you will see the Python Interpreter open in your taskbar, minimized.
 
-The Spandrel RealPLKSR runner is separate from the legacy ESRGAN Python bundle.  It needs Python 3.10 or newer with PyTorch, `spandrel==0.4.2`, and Pillow.  It looks for `python.exe` on PATH or beside AutoCrispy; set `AUTOCRISPY_PYTHON` to the full executable path for a custom install.  See [PLKSR_SETUP.md](PLKSR_SETUP.md) for checkpoint and GPU setup.
+The Spandrel PLKSR/DAT2 runner is separate from the legacy ESRGAN Python bundle. It needs Python 3.10 or newer with PyTorch, `spandrel==0.4.2`, and Pillow. It looks for `python.exe` on PATH or beside AutoCrispy; set `AUTOCRISPY_PYTHON` to the full executable path for a custom install. See [PLKSR_SETUP.md](PLKSR_SETUP.md) for checkpoint and GPU setup.
 
 ## Chains
 

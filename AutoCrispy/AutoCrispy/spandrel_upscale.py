@@ -1,8 +1,8 @@
-"""Folder-based RealPLKSR inference bridge for AutoCrispy.
+"""Folder-based Spandrel inference bridge for AutoCrispy.
 
-Loads the 4x-PBRify_RPLKSRd_V3 checkpoint through Spandrel (the same model
-loader family used by chaiNNer), then upscales the supported files in one
-input directory. The model is kept resident for the whole batch.
+Loads the supported PBRify RealPLKSR-DySample and DAT2 checkpoints through
+Spandrel, then upscales the supported files in one input directory. The model
+is kept resident for the whole batch.
 """
 
 from __future__ import annotations
@@ -24,16 +24,21 @@ SUPPORTED_EXTENSIONS = {
     ".webp",
     ".tga",
 }
-EXPECTED_MODEL_NAME = "4x-PBRify_RPLKSRd_V3.pth"
+PLKSR_MODEL_NAME = "4x-PBRify_RPLKSRd_V3.pth"
+DAT2_MODEL_NAME = "4x-PBRify_UpscalerV4.pth"
+MODEL_PROFILES = {
+    PLKSR_MODEL_NAME.casefold(): ("RealPLKSR-DySample", None),
+    DAT2_MODEL_NAME.casefold(): ("DAT2", "DAT"),
+}
 MODEL_SCALE = 4
 TILE_OVERLAP = 32
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Upscale a folder of textures with 4x-PBRify_RPLKSRd_V3."
+        description="Upscale a folder of textures with a supported PBRify checkpoint."
     )
-    parser.add_argument("model", type=Path, help="RealPLKSR .pth checkpoint")
+    parser.add_argument("model", type=Path, help="Supported PBRify .pth checkpoint")
     parser.add_argument("--input", required=True, type=Path, help="Input folder")
     parser.add_argument("--output", required=True, type=Path, help="Output folder")
     parser.add_argument(
@@ -57,15 +62,18 @@ def _load_model(model_path: Path, force_cpu: bool) -> tuple[Any, Any, Any, str]:
         from spandrel import ImageModelDescriptor, ModelLoader
     except ImportError as error:
         raise RuntimeError(
-            "RealPLKSR needs PyTorch and Spandrel. Follow PLKSR_SETUP.md "
-            "to install them in the Python environment AutoCrispy uses."
+            "The PBRify upscalers need PyTorch and Spandrel. Follow "
+            "PLKSR_SETUP.md to install them in AutoCrispy's Python environment."
         ) from error
 
-    if model_path.name.casefold() != EXPECTED_MODEL_NAME.casefold():
-        raise ValueError(f"Only {EXPECTED_MODEL_NAME} is supported by this AutoCrispy runner.")
+    profile = MODEL_PROFILES.get(model_path.name.casefold())
+    if profile is None:
+        supported = f"{PLKSR_MODEL_NAME}, {DAT2_MODEL_NAME}"
+        raise ValueError(f"This AutoCrispy runner supports only: {supported}.")
     if not model_path.is_file():
         raise FileNotFoundError(f"Checkpoint not found: {model_path}")
 
+    display_name, expected_architecture = profile
     device = torch.device(
         "cpu" if force_cpu or not torch.cuda.is_available() else "cuda:0"
     )
@@ -73,28 +81,50 @@ def _load_model(model_path: Path, force_cpu: bool) -> tuple[Any, Any, Any, str]:
     if not isinstance(descriptor, ImageModelDescriptor):
         raise ValueError("The selected checkpoint is not an image super-resolution model.")
 
+    architecture = str(descriptor.architecture.id)
     tags = {str(tag).casefold() for tag in descriptor.tags}
-    if (
-        descriptor.scale != MODEL_SCALE
-        or descriptor.input_channels != 3
-        or descriptor.output_channels != 3
-        or "real" not in tags
-        or "dysample" not in tags
-    ):
+    common_valid = (
+        descriptor.purpose == "SR"
+        and descriptor.scale == MODEL_SCALE
+        and descriptor.input_channels == 3
+        and descriptor.output_channels == 3
+    )
+    if display_name == "RealPLKSR-DySample":
+        model_valid = "real" in tags and "dysample" in tags
+    else:
+        model_valid = (
+            expected_architecture is not None
+            and architecture.casefold() == expected_architecture.casefold()
+        )
+
+    if not common_valid or not model_valid:
+        expected_description = (
+            "4x RealPLKSR-DySample RGB"
+            if display_name == "RealPLKSR-DySample"
+            else "4x DAT RGB"
+        )
         raise ValueError(
-            "Expected the 4x RealPLKSR-DySample RGB checkpoint "
-            f"{EXPECTED_MODEL_NAME}; Spandrel detected scale={descriptor.scale}, "
+            f"Expected the {expected_description} checkpoint {model_path.name}; "
+            f"Spandrel detected architecture={architecture}, purpose={descriptor.purpose}, "
+            f"scale={descriptor.scale}, "
             f"channels={descriptor.input_channels}->{descriptor.output_channels}, "
             f"tags={sorted(tags)}."
         )
 
-    # Some RealPLKSR-DySample checkpoints do not support half precision. Respect
-    # Spandrel's per-checkpoint capability instead of forcing fp16 on the GPU.
-    dtype = (
-        torch.float16
-        if device.type == "cuda" and descriptor.supports_half
-        else torch.float32
-    )
+    # Use the checkpoint's advertised precision support. DAT does not support
+    # fp16 in Spandrel, but supported GPUs can run it in bfloat16 instead.
+    if device.type == "cuda" and descriptor.supports_half:
+        dtype = torch.float16
+    elif (
+        device.type == "cuda"
+        and getattr(descriptor, "supports_bfloat16", False)
+        and hasattr(torch.cuda, "is_bf16_supported")
+        and torch.cuda.is_bf16_supported()
+    ):
+        dtype = torch.bfloat16
+    else:
+        dtype = torch.float32
+
     descriptor.to(device, dtype)
     descriptor.model.eval()
     return descriptor, device, dtype, str(device)
@@ -259,8 +289,9 @@ def run(args: argparse.Namespace) -> int:
     args.output.mkdir(parents=True, exist_ok=True)
 
     model, device, dtype, device_name = _load_model(args.model, args.cpu)
+    display_name = MODEL_PROFILES[args.model.name.casefold()][0]
     print(
-        f"Loaded {args.model.name}: RealPLKSR-DySample x{model.scale} on "
+        f"Loaded {args.model.name}: {display_name} x{model.scale} on "
         f"{device_name} ({dtype})."
     )
 
@@ -288,7 +319,7 @@ def main() -> int:
     try:
         return run(args)
     except Exception as error:
-        print(f"AutoCrispy RealPLKSR error: {error}", file=sys.stderr)
+        print(f"AutoCrispy Spandrel error: {error}", file=sys.stderr)
         if args.debug:
             traceback.print_exc()
         return 1

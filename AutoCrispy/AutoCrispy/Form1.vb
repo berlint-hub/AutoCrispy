@@ -1,4 +1,4 @@
-﻿Imports System.IO
+Imports System.IO
 Imports System.Reflection
 
 Public Class Form1
@@ -29,9 +29,12 @@ Public Class Form1
     Public Property PyPath As String
     Public Property PyModels As New List(Of String)
     Public Property PLKSRModelPath As String
+    Public Property DAT2ModelPath As String
 
     Private Const PLKSRBackendName As String = "PLKSR"
     Private Const PLKSRCheckpointName As String = "4x-PBRify_RPLKSRd_V3.pth"
+    Private Const DAT2BackendName As String = "DAT2"
+    Private Const DAT2CheckpointName As String = "4x-PBRify_UpscalerV4.pth"
     Private Const SpandrelRunnerName As String = "spandrel_upscale.py"
 
 #End Region
@@ -84,13 +87,10 @@ Public Class Form1
         End If
         StartUpCheckEXE()
         If ExeComboBox.Items.Count > 0 Then
-            Dim PreferredBackendIndex As Integer = ExeComboBox.Items.IndexOf(PLKSRBackendName)
-            If PreferredBackendIndex >= 0 Then
-                ExeComboBox.SelectedIndex = PreferredBackendIndex
-                ReplaceLegacyUpscalerChain()
-            Else
-                ExeComboBox.SelectedIndex = 0
-            End If
+            Dim PreferredBackendIndex As Integer = GetPreferredSpandrelBackendIndex()
+            If PreferredBackendIndex < 0 Then PreferredBackendIndex = 0
+            ExeComboBox.SelectedIndex = PreferredBackendIndex
+            If GetPreferredSpandrelBackendIndex() >= 0 Then ReplaceLegacyUpscalerChain()
             SetSettingsWindow()
         End If
         ChainControl.DrawList(ChainControl.ListItems)
@@ -117,12 +117,12 @@ Public Class Form1
         PyModel.Items.Clear()
         PyPath = ""
         PLKSRModelPath = ""
+        DAT2ModelPath = ""
 
         If Not Directory.Exists(Root) Then
-            PLKSRModelPath = FindPLKSRModel(Application.StartupPath)
-            If PLKSRModelPath <> "" AndAlso File.Exists(Path.Combine(Application.StartupPath, SpandrelRunnerName)) Then
-                ExeComboBox.Items.Add(PLKSRBackendName)
-            End If
+            PLKSRModelPath = FindSpandrelModel(Application.StartupPath, PLKSRCheckpointName)
+            DAT2ModelPath = FindSpandrelModel(Application.StartupPath, DAT2CheckpointName)
+            AddSpandrelBackends()
             Exit Sub
         End If
 
@@ -144,7 +144,9 @@ Public Class Form1
                 PyPath = "\" & IIf(Folder <> Root, Path.GetFileName(Folder), "") & "\esrgan.exe"
                 For Each SubFolder As String In Directory.GetDirectories(Folder)
                     For Each PythonModel As String In Directory.EnumerateFiles(SubFolder, "*.pth")
-                        If Not Path.GetFileName(PythonModel).Equals(PLKSRCheckpointName, StringComparison.OrdinalIgnoreCase) AndAlso Not PyModels.Contains(PythonModel) Then
+                        Dim ModelName As String = Path.GetFileName(PythonModel)
+                        Dim IsSpandrelCheckpoint As Boolean = ModelName.Equals(PLKSRCheckpointName, StringComparison.OrdinalIgnoreCase) OrElse ModelName.Equals(DAT2CheckpointName, StringComparison.OrdinalIgnoreCase)
+                        If Not IsSpandrelCheckpoint AndAlso Not PyModels.Contains(PythonModel) Then
                             PyModels.Add(PythonModel)
                         End If
                     Next
@@ -152,20 +154,30 @@ Public Class Form1
             End If
         Next
 
-        PLKSRModelPath = FindPLKSRModel(Root)
-        If PLKSRModelPath = "" AndAlso Not String.Equals(Root, Application.StartupPath, StringComparison.OrdinalIgnoreCase) Then
-            PLKSRModelPath = FindPLKSRModel(Application.StartupPath)
+        PLKSRModelPath = FindSpandrelModel(Root, PLKSRCheckpointName)
+        DAT2ModelPath = FindSpandrelModel(Root, DAT2CheckpointName)
+        If Not String.Equals(Root, Application.StartupPath, StringComparison.OrdinalIgnoreCase) Then
+            If PLKSRModelPath = "" Then PLKSRModelPath = FindSpandrelModel(Application.StartupPath, PLKSRCheckpointName)
+            If DAT2ModelPath = "" Then DAT2ModelPath = FindSpandrelModel(Application.StartupPath, DAT2CheckpointName)
         End If
-        If PLKSRModelPath <> "" AndAlso File.Exists(Path.Combine(Application.StartupPath, SpandrelRunnerName)) Then
-            ExeComboBox.Items.Add(PLKSRBackendName)
-        End If
+        AddSpandrelBackends()
 
-        If ExeComboBox.Items.Contains("ESRGAN") AndAlso PyModels.Count = 0 AndAlso PLKSRModelPath = "" Then
+        If ExeComboBox.Items.Contains("ESRGAN") AndAlso PyModels.Count = 0 AndAlso PLKSRModelPath = "" AndAlso DAT2ModelPath = "" Then
             MsgBox("No ESRGAN Models Found!", MsgBoxStyle.Critical)
         End If
     End Sub
 
-    Private Function FindPLKSRModel(SearchRoot As String) As String
+    Private Sub AddSpandrelBackends()
+        If Not File.Exists(Path.Combine(Application.StartupPath, SpandrelRunnerName)) Then Return
+        If PLKSRModelPath <> "" AndAlso Not ExeComboBox.Items.Contains(PLKSRBackendName) Then
+            ExeComboBox.Items.Add(PLKSRBackendName)
+        End If
+        If DAT2ModelPath <> "" AndAlso Not ExeComboBox.Items.Contains(DAT2BackendName) Then
+            ExeComboBox.Items.Add(DAT2BackendName)
+        End If
+    End Sub
+
+    Private Function FindSpandrelModel(SearchRoot As String, CheckpointName As String) As String
         If Not Directory.Exists(SearchRoot) Then Return ""
 
         Dim SearchFolders As New List(Of String) From {SearchRoot}
@@ -178,7 +190,7 @@ Public Class Form1
 
         For Each SearchFolder As String In SearchFolders
             For Each Candidate As String In Directory.GetFiles(SearchFolder)
-                If Path.GetFileName(Candidate).Equals(PLKSRCheckpointName, StringComparison.OrdinalIgnoreCase) Then
+                If Path.GetFileName(Candidate).Equals(CheckpointName, StringComparison.OrdinalIgnoreCase) Then
                     Return Candidate
                 End If
             Next
@@ -187,8 +199,34 @@ Public Class Form1
         Return ""
     End Function
 
+    Private Function GetPreferredSpandrelBackendIndex() As Integer
+        Dim PreferredIndex As Integer = ExeComboBox.Items.IndexOf(PLKSRBackendName)
+        If PreferredIndex >= 0 Then Return PreferredIndex
+        Return ExeComboBox.Items.IndexOf(DAT2BackendName)
+    End Function
+
+    Private Function GetPreferredSpandrelBackendName() As String
+        If ExeComboBox.Items.Contains(PLKSRBackendName) Then Return PLKSRBackendName
+        If ExeComboBox.Items.Contains(DAT2BackendName) Then Return DAT2BackendName
+        Return ""
+    End Function
+
+    Private Function GetSpandrelModelPath(BackendName As String) As String
+        Select Case BackendName
+            Case PLKSRBackendName
+                Return PLKSRModelPath
+            Case DAT2BackendName
+                Return DAT2ModelPath
+        End Select
+        Return ""
+    End Function
+
     Private Sub ReplaceLegacyUpscalerChain()
-        If String.IsNullOrWhiteSpace(PLKSRModelPath) Then Return
+        Dim PreferredBackend As String = GetPreferredSpandrelBackendName()
+        If PreferredBackend = "" Then Return
+        Dim PreferredModel As String = GetSpandrelModelPath(PreferredBackend)
+        Dim PreferredName As String = If(PreferredBackend = DAT2BackendName, "PBRify V4 DAT2 4x", "PLKSR 4x")
+        Dim PreferredPackageType As String = If(PreferredBackend = DAT2BackendName, DAT2BackendName, "RealPLKSR")
 
         Dim ChainWasUpdated As Boolean = False
         For i As Integer = 0 To ChainList.Count - 1
@@ -196,11 +234,11 @@ Public Class Form1
             If ChainItem.PackageType = "ESRGAN" AndAlso ChainItem.Package IsNot Nothing Then
                 Dim PythonSettings As FormSettings.PythonPackage = CType(ChainItem.Package, FormSettings.PythonPackage)
                 If String.Equals(Path.GetFileNameWithoutExtension(PythonSettings.Model), "4x_gameai_2.0", StringComparison.OrdinalIgnoreCase) Then
-                    PythonSettings = New FormSettings.PythonPackage(PLKSRModelPath, PythonSettings.TileSize, PythonSettings.CPUOnly, True)
-                    ChainItem.Name = "PLKSR 4x"
+                    PythonSettings = New FormSettings.PythonPackage(PreferredModel, PythonSettings.TileSize, PythonSettings.CPUOnly, True)
+                    ChainItem.Name = PreferredName
                     ChainItem.FileLocation = ""
                     ChainItem.Package = PythonSettings
-                    ChainItem.PackageType = "RealPLKSR"
+                    ChainItem.PackageType = PreferredPackageType
                     ChainList(i) = ChainItem
                     ChainWasUpdated = True
                 End If
@@ -263,13 +301,10 @@ Public Class Form1
         End If
         StartUpCheckEXE()
         If ExeComboBox.Items.Count > 0 Then
-            Dim PreferredBackendIndex As Integer = ExeComboBox.Items.IndexOf(PLKSRBackendName)
-            If PreferredBackendIndex >= 0 Then
-                ExeComboBox.SelectedIndex = PreferredBackendIndex
-                ReplaceLegacyUpscalerChain()
-            Else
-                ExeComboBox.SelectedIndex = 0
-            End If
+            Dim PreferredBackendIndex As Integer = GetPreferredSpandrelBackendIndex()
+            If PreferredBackendIndex < 0 Then PreferredBackendIndex = 0
+            ExeComboBox.SelectedIndex = PreferredBackendIndex
+            If GetPreferredSpandrelBackendIndex() >= 0 Then ReplaceLegacyUpscalerChain()
             SetSettingsWindow()
         End If
     End Sub
@@ -295,7 +330,7 @@ Public Class Form1
                 For Each ChainItem As FormSettings.ChainObject In ChainList
                     ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.IndexOf(ChainItem), ChainItem.Name, ChainThumbs.Item(ChainItem.IconIndex)))
                 Next
-                If ExeComboBox.Items.Contains(PLKSRBackendName) Then ReplaceLegacyUpscalerChain()
+                If GetPreferredSpandrelBackendIndex() >= 0 Then ReplaceLegacyUpscalerChain()
                 ChainControl.DrawList(ChainControl.ListItems)
             End If
         End Using
@@ -452,22 +487,27 @@ Public Class Form1
             Case "xBRZ"
                 MoveShowGroup(xBRZGroup)
             Case "ESRGAN"
-                ConfigurePythonModelSelector(False)
+                ConfigurePythonModelSelector("ESRGAN")
                 PyGroup.Text = "ESRGAN"
                 MoveShowGroup(PyGroup)
             Case PLKSRBackendName
-                ConfigurePythonModelSelector(True)
+                ConfigurePythonModelSelector(PLKSRBackendName)
                 PyGroup.Text = "PLKSR"
+                MoveShowGroup(PyGroup)
+            Case DAT2BackendName
+                ConfigurePythonModelSelector(DAT2BackendName)
+                PyGroup.Text = "PBRify DAT2"
                 MoveShowGroup(PyGroup)
         End Select
     End Sub
 
-    Private Sub ConfigurePythonModelSelector(UsePLKSR As Boolean)
+    Private Sub ConfigurePythonModelSelector(BackendName As String)
         PyModel.BeginUpdate()
         PyModel.Items.Clear()
-        If UsePLKSR Then
-            If PLKSRModelPath <> "" Then
-                PyModel.Items.Add(Path.GetFileName(PLKSRModelPath))
+        If BackendName = PLKSRBackendName OrElse BackendName = DAT2BackendName Then
+            Dim ModelPath As String = GetSpandrelModelPath(BackendName)
+            If ModelPath <> "" Then
+                PyModel.Items.Add(Path.GetFileName(ModelPath))
                 PyModel.SelectedIndex = 0
             End If
             PyModel.Enabled = False
@@ -482,8 +522,9 @@ Public Class Form1
     End Sub
 
     Public Function GetSelectedUpscaleModel() As String
-        If If(ExeComboBox.SelectedItem, "").ToString() = PLKSRBackendName Then
-            Return PLKSRModelPath
+        Dim BackendName As String = If(ExeComboBox.SelectedItem, "").ToString()
+        If BackendName = PLKSRBackendName OrElse BackendName = DAT2BackendName Then
+            Return GetSpandrelModelPath(BackendName)
         End If
         If PyModel.SelectedIndex >= 0 AndAlso PyModel.SelectedIndex < PyModels.Count Then
             Return PyModels(PyModel.SelectedIndex)
@@ -734,12 +775,14 @@ Public Class Form1
     Private Sub StartBuilder(SourcePath As String, DestPath As String, ImageList As List(Of String), Model As FormSettings.ChainObject)
         If ImageList.Count > 0 Then
             Dim BuildProcess As ProcessStartInfo
-            If Model.PackageType = "ESRGAN" OrElse Model.PackageType = "RealPLKSR" OrElse Model.PackageType.Contains("Vulkan") Then
-                If Model.PackageType = "RealPLKSR" Then
+            Dim IsSpandrelBackend As Boolean = IsSpandrelPackageType(Model.PackageType)
+            Dim BackendDisplay As String = If(Model.PackageType = DAT2BackendName, "DAT2", "RealPLKSR")
+            If Model.PackageType = "ESRGAN" OrElse IsSpandrelBackend OrElse Model.PackageType.Contains("Vulkan") Then
+                If IsSpandrelBackend Then
                     Dim PythonExecutable As String = FindPythonExecutable()
                     Dim RunnerPath As String = Path.Combine(Application.StartupPath, SpandrelRunnerName)
                     If PythonExecutable = "" Then
-                        Throw New InvalidOperationException("RealPLKSR needs Python 3.10 or newer. Add python.exe to PATH, place it beside AutoCrispy, or set AUTOCRISPY_PYTHON to its full path. See PLKSR_SETUP.md.")
+                        Throw New InvalidOperationException(BackendDisplay & " needs Python 3.10 or newer. Add python.exe to PATH, place it beside AutoCrispy, or set AUTOCRISPY_PYTHON to its full path. See PLKSR_SETUP.md.")
                     End If
                     If Not File.Exists(RunnerPath) Then
                         Throw New FileNotFoundException("The AutoCrispy Spandrel runner was not found.", RunnerPath)
@@ -755,19 +798,19 @@ Public Class Form1
                 BuildProcess.UseShellExecute = False
                 BuildProcess.CreateNoWindow = True
                 Dim BatchProcess As Process = Process.Start(BuildProcess)
-                If Model.PackageType = "RealPLKSR" Then
+                If IsSpandrelBackend Then
                     Dim StandardOutputTask = BatchProcess.StandardOutput.ReadToEndAsync()
                     Dim StandardErrorTask = BatchProcess.StandardError.ReadToEndAsync()
                     BatchProcess.WaitForExit()
                     Dim StandardOutput As String = StandardOutputTask.Result
                     Dim StandardError As String = StandardErrorTask.Result
                     If LoadedSettings.ExpertSettings.Logging OrElse BatchProcess.ExitCode <> 0 Then
-                        WriteProcessLog(BuildProcess, StandardOutput, StandardError, LoadedSettings.Paths.OutputPath)
+                        WriteProcessLog(BuildProcess, StandardOutput, StandardError, LoadedSettings.Paths.OutputPath, Model.PackageType)
                     End If
                     If BatchProcess.ExitCode <> 0 Then
                         Dim Details As String = If(StandardError.Trim() <> "", StandardError.Trim(), StandardOutput.Trim())
                         If Details.Length > 2000 Then Details = Details.Substring(0, 2000) & "..."
-                        Throw New InvalidOperationException("RealPLKSR inference failed (exit code " & BatchProcess.ExitCode.ToString() & "). " & Details)
+                        Throw New InvalidOperationException(BackendDisplay & " inference failed (exit code " & BatchProcess.ExitCode.ToString() & "). " & Details)
                     End If
                 Else
                     BatchProcess.WaitForExit()
@@ -807,6 +850,10 @@ Public Class Form1
         End If
     End Sub
 
+    Private Function IsSpandrelPackageType(PackageType As String) As Boolean
+        Return PackageType = "RealPLKSR" OrElse PackageType = DAT2BackendName
+    End Function
+
     Private Function GetChainPath(PathType As String, PathIndex As Integer) As String
         Return Path.GetTempPath & PathType & "_" & PathIndex & "_" & LoadedSettings.ExpertSettings.AlphaMode
     End Function
@@ -837,7 +884,7 @@ Public Class Form1
                 Return MakeXBRZCommand(Source, Dest, Package)
             Case "ESRGAN"
                 Return MakePyCommand(Source, Dest, Package)
-            Case "RealPLKSR"
+            Case "RealPLKSR", DAT2BackendName
                 Return MakeSpandrelCommand(Source, Dest, Package)
         End Select
         Return ""
@@ -878,6 +925,9 @@ Public Class Form1
             Case PLKSRBackendName
                 ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, "PLKSR 4x", ChainThumbs.Item(6)))
                 ChainList.Add(New FormSettings.ChainObject("PLKSR 4x", 6, "", "RealPLKSR", Me))
+            Case DAT2BackendName
+                ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, "PBRify V4 DAT2 4x", ChainThumbs.Item(6)))
+                ChainList.Add(New FormSettings.ChainObject("PBRify V4 DAT2 4x", 6, "", DAT2BackendName, Me))
         End Select
         ChainControl.DrawList(ChainControl.ListItems)
     End Sub
@@ -1240,8 +1290,8 @@ Public Class Form1
         File.WriteAllText(Filename, Output)
     End Sub
 
-    Private Sub WriteProcessLog(StartInfo As ProcessStartInfo, StandardOutput As String, StandardError As String, SaveLoc As String)
-        Dim Filename As String = Path.Combine(SaveLoc, "RealPLKSR_" & Now.ToString("yyyy-MM-dd_HH-mm-ss") & ".txt")
+    Private Sub WriteProcessLog(StartInfo As ProcessStartInfo, StandardOutput As String, StandardError As String, SaveLoc As String, BackendName As String)
+        Dim Filename As String = Path.Combine(SaveLoc, BackendName & "_" & Now.ToString("yyyy-MM-dd_HH-mm-ss") & ".txt")
         Dim Output As String = StartInfo.FileName & " " & StartInfo.Arguments & vbNewLine & vbNewLine
         Output &= StandardOutput & vbNewLine & vbNewLine & StandardError
         File.WriteAllText(Filename, Output)

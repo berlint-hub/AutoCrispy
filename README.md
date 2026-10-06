@@ -36,9 +36,9 @@ https://github.com/WalkerMx/ESRGAN_Python_Embedded/releases
 
 This does not include any models. [They can be found here.](https://openmodeldb.info/)
 
-## PLKSR
+## PBRify upscalers (PLKSR and DAT2)
 
-AutoCrispy includes a **PLKSR** backend for the live 4× `4x-PBRify_RPLKSRd_V3` texture upscaler. It uses Spandrel to load this RealPLKSR-DySample checkpoint; it does not require the chaiNNer GUI or the rest of the PBRify workflow. The checkpoint and Python/PyTorch runtime must be installed separately. See the [PLKSR setup guide](PLKSR_SETUP.md).
+AutoCrispy includes two optional, fixed 4× PBRify texture upscalers: **PLKSR** (`4x-PBRify_RPLKSRd_V3`) and **DAT2** (`4x-PBRify_UpscalerV4`). Both use the bundled Spandrel runner; neither requires the chaiNNer GUI or the rest of the PBRify workflow. The checkpoints and Python/PyTorch runtime must be installed separately. See the [setup guide](PLKSR_SETUP.md).
 
 ## How to use:
     -Toss AutoCrispy into the folder from the backend(s) you chose, and run it.

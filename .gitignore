@@ -1,2 +1,4 @@
-# Downloaded checkpoint is a user-installed model asset, not source code.
+# Downloaded checkpoints are user-installed model assets, not source code.
 4x-PBRify_RPLKSRd_V3.pth
+4x-PBRify_UpscalerV4.pth
+4x-PBRify_UpscalerV4.safetensors
