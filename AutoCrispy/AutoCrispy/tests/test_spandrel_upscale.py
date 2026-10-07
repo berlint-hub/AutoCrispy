@@ -244,8 +244,10 @@ class SpandrelRunnerTests(unittest.TestCase):
             input_folder.mkdir()
             architect_file = input_folder / "a-architect.png"
             painter_file = input_folder / "z-painter.png"
+            unsupported_file = input_folder / "ignored.dds"
             architect_file.touch()
             painter_file.touch()
+            unsupported_file.touch()
             architect_path = root / "solid-textures-model.pth"
             painter_path = root / "repeating-textures-model.safetensors"
             architect = FakeImageDescriptor()
@@ -268,16 +270,23 @@ class SpandrelRunnerTests(unittest.TestCase):
             def fake_features(path: Path) -> dict[str, float]:
                 return {"score": 0.5 if path == painter_file else 0.1}
 
+            processed_files: list[Path] = []
+
+            def fake_process_image(input_path: Path, *_args: object) -> None:
+                processed_files.append(input_path)
+
             output = io.StringIO()
             with (
                 patch.object(runner, "_load_model", side_effect=fake_load_model),
                 patch.object(runner, "_texture_features", side_effect=fake_features),
-                patch.object(runner, "_process_image"),
+                patch.object(runner, "_process_image", side_effect=fake_process_image),
                 contextlib.redirect_stdout(output),
             ):
                 result = runner._run_auto_route(args)
 
             self.assertEqual(result, 0)
+            self.assertCountEqual(processed_files, [architect_file, painter_file])
+            self.assertNotIn(unsupported_file, processed_files)
             log = output.getvalue()
             self.assertIn("AUTOCRISPY_ROUTE_SUMMARY: total=2; Architect=1; Painter=1", log)
             self.assertIn(f"AUTOCRISPY_MODELS: Architect={architect_path.resolve()}", log)

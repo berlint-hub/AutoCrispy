@@ -14,7 +14,8 @@ Public Class Form1
     Dim WaitScale As Integer = 0
     Dim SettingsLoc As Point
     Dim LoadedSettings As FormSettings.Settings
-    Dim SkipList As New List(Of String)
+    Private ReadOnly SkipList As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+    Private ReadOnly SkipListLock As New Object()
     Private LastSelectedSpandrelModelPath As String = ""
     Private LastSelectedArchitectModelPath As String = ""
     Private LastSelectedPainterModelPath As String = ""
@@ -1443,6 +1444,10 @@ Public Class Form1
         Dim ProfilesToWatch As List(Of FormSettings.GamePathProfile) = GetEffectiveGamePathProfiles()
         Dim PendingProfiles As New List(Of FormSettings.GamePathProfile)
         Dim MissingProfileCount As Integer = 0
+        ' Use the first stage's input types and cached alpha-filter results so skipped files do not
+        ' keep scheduling empty batches (or an empty Python process) forever.
+        Dim SupportedExtensions As HashSet(Of String) = GetActiveInputFileTypes()
+        Dim AlphaMode As Integer = GetActiveAlphaMode()
 
         For Each Profile As FormSettings.GamePathProfile In ProfilesToWatch
             Try
@@ -1450,10 +1455,14 @@ Public Class Form1
                     MissingProfileCount += 1
                     Continue For
                 End If
-                Dim InputFiles As String() = Directory.GetFiles(Profile.InputPath, "*.*", SearchOption.AllDirectories)
-                If InputFiles.Length > 0 AndAlso GetMissingFiles(InputFiles, Profile.OutputPath).Length > 0 Then
-                    PendingProfiles.Add(CloneGamePathProfile(Profile))
-                End If
+                Dim AllInputFiles As String() = Directory.GetFiles(Profile.InputPath, "*.*", SearchOption.AllDirectories)
+                Dim UnsupportedCount As Integer = 0
+                Dim AlphaFilteredCount As Integer = 0
+                Dim SupportedCount As Integer = 0
+                Dim MissingCount As Integer = 0
+                Dim PendingFiles As String() = GetPendingInputFiles(AllInputFiles, Profile.OutputPath, SupportedExtensions, AlphaMode,
+                                                                      UnsupportedCount, AlphaFilteredCount, SupportedCount, MissingCount)
+                If PendingFiles.Length > 0 Then PendingProfiles.Add(CloneGamePathProfile(Profile))
             Catch ex As IOException
                 MissingProfileCount += 1
             Catch ex As UnauthorizedAccessException
@@ -1485,17 +1494,22 @@ Public Class Form1
         End If
     End Sub
 
-    ' Progress is overall completion: inputs with matching output files divided by all inputs.
+    ' Progress is overall completion for files the first pipeline stage can accept.
     ' Match by basename so format conversions (for example PNG input to DDS output) count as done.
     Private Sub ProgressPollTimer_Tick(sender As Object, e As EventArgs) Handles ProgressPollTimer.Tick
         Try
             Dim DoneCount As Integer = 0
             Dim TotalCount As Integer = 0
-            Dim Percent As Integer = GetOverallProgress(DoneCount, TotalCount)
+            Dim UnsupportedCount As Integer = 0
+            Dim AlphaFilteredCount As Integer = 0
+            Dim Percent As Integer = GetOverallProgress(DoneCount, TotalCount, UnsupportedCount, AlphaFilteredCount)
             If Percent < UpscaleProgress.Minimum Then Percent = UpscaleProgress.Minimum
             If Percent > UpscaleProgress.Maximum Then Percent = UpscaleProgress.Maximum
             UpscaleProgress.Value = Percent
-            QueueSummaryLabel.Text = DoneCount.ToString() & " / " & TotalCount.ToString() & " textures complete (" & Percent.ToString() & "%)"
+            Dim SkippedSummary As String = ""
+            If UnsupportedCount > 0 Then SkippedSummary &= " · " & UnsupportedCount.ToString() & " unsupported skipped"
+            If AlphaFilteredCount > 0 Then SkippedSummary &= " · " & AlphaFilteredCount.ToString() & " skipped by alpha filter"
+            QueueSummaryLabel.Text = DoneCount.ToString() & " / " & TotalCount.ToString() & " textures complete (" & Percent.ToString() & "%)" & SkippedSummary
 
             If Not WorkHorse.IsBusy AndAlso RefreshSpandrelModelsButton.Enabled Then
                 If WatchDog.Enabled Then
@@ -1518,14 +1532,27 @@ Public Class Form1
         ProgressPollTimer.Interval = If(WorkHorse.IsBusy, 1000, 5000)
     End Sub
 
-    Private Function GetOverallProgress(ByRef DoneCount As Integer, ByRef TotalCount As Integer) As Integer
+    Private Function GetOverallProgress(ByRef DoneCount As Integer, ByRef TotalCount As Integer,
+                                        ByRef UnsupportedCount As Integer, ByRef AlphaFilteredCount As Integer) As Integer
         DoneCount = 0
         TotalCount = 0
+        UnsupportedCount = 0
+        AlphaFilteredCount = 0
+        Dim SupportedExtensions As HashSet(Of String) = GetActiveInputFileTypes()
+        Dim AlphaMode As Integer = GetActiveAlphaMode()
         For Each Profile As FormSettings.GamePathProfile In GetEffectiveGamePathProfiles()
             If Not Directory.Exists(Profile.InputPath) OrElse Not Directory.Exists(Profile.OutputPath) Then Continue For
-            Dim InputFiles As String() = Directory.GetFiles(Profile.InputPath, "*.*", SearchOption.AllDirectories)
-            TotalCount += InputFiles.Length
-            DoneCount += InputFiles.Length - GetMissingFiles(InputFiles, Profile.OutputPath).Length
+            Dim AllInputFiles As String() = Directory.GetFiles(Profile.InputPath, "*.*", SearchOption.AllDirectories)
+            Dim ProfileUnsupportedCount As Integer = 0
+            Dim ProfileAlphaFilteredCount As Integer = 0
+            Dim SupportedCount As Integer = 0
+            Dim MissingCount As Integer = 0
+            Dim PendingFiles As String() = GetPendingInputFiles(AllInputFiles, Profile.OutputPath, SupportedExtensions, AlphaMode,
+                                                                  ProfileUnsupportedCount, ProfileAlphaFilteredCount, SupportedCount, MissingCount)
+            UnsupportedCount += ProfileUnsupportedCount
+            AlphaFilteredCount += ProfileAlphaFilteredCount
+            TotalCount += SupportedCount - ProfileAlphaFilteredCount
+            DoneCount += SupportedCount - MissingCount
         Next
 
         If TotalCount = 0 OrElse DoneCount <= 0 Then Return 0
@@ -1567,7 +1594,7 @@ Public Class Form1
             WatchDogButton.Text = "Running: False"
             SwitchGroups(True)
             WatchDogButton.Enabled = True
-            SkipList.Clear()
+            ClearAlphaSkipList()
             QueueActivityLabel.Text = "Cancelled"
             Dim SingleRunPath As String = Path.Combine(Path.GetTempPath(), "Single_0")
             If Directory.Exists(SingleRunPath) Then Directory.Delete(SingleRunPath, True)
@@ -1579,7 +1606,7 @@ Public Class Form1
             WatchDogButton.Text = "Running: False"
             WatchDogButton.Enabled = True
             SwitchGroups(True)
-            SkipList.Clear()
+            ClearAlphaSkipList()
             QueueActivityLabel.Text = "Failed — see error details"
             UiToolTip.SetToolTip(QueueActivityLabel, e.Error.GetBaseException().Message)
             Dim SingleRunPath As String = Path.Combine(Path.GetTempPath(), "Single_0")
@@ -1591,6 +1618,7 @@ Public Class Form1
             QueueActivityLabel.Text = "Watching for new textures…"
             WatchDog.Start()
         Else
+            ClearAlphaSkipList()
             QueueActivityLabel.Text = "One-off run complete"
             WatchDog.Stop()
             WatchDog.Enabled = False
@@ -1623,7 +1651,14 @@ Public Class Form1
         Dim TempPath As String = GetChainPath("Temp", 0)
         Dim ThreadCount As Integer = GetThreads(LoadedSettings.BasicSettings.ThreadIndex, LoadedSettings.BasicSettings.ThreadCount)
         If ThreadCount < 1 Then ThreadCount = 1
-        Dim Source As String() = GetMissingFiles(LoadedSettings.Paths.InputPath, LoadedSettings.Paths.OutputPath)
+        Dim AllInputFiles As String() = Directory.GetFiles(LoadedSettings.Paths.InputPath, "*.*", SearchOption.AllDirectories)
+        Dim UnsupportedCount As Integer = 0
+        Dim AlphaFilteredCount As Integer = 0
+        Dim SupportedCount As Integer = 0
+        Dim MissingCount As Integer = 0
+        Dim Source As String() = GetPendingInputFiles(AllInputFiles, LoadedSettings.Paths.OutputPath, GetActiveInputFileTypes(),
+                                                      LoadedSettings.ExpertSettings.AlphaMode, UnsupportedCount,
+                                                      AlphaFilteredCount, SupportedCount, MissingCount)
         If WorkHorse.CancellationPending Then
             CleanupUpscaleTemporaryFolders()
             Return
@@ -1647,7 +1682,7 @@ Public Class Form1
             Next
             ChainPaths.Add(LoadedSettings.Paths.OutputPath)
             Directory.CreateDirectory(TempPath)
-            CopyFiles(Source, SkipList, TempPath, CurrentIndex, BatchLimit)
+            CopyFiles(Source, TempPath, CurrentIndex, BatchLimit)
             If WorkHorse.CancellationPending Then
                 CleanupUpscaleTemporaryFolders()
                 Return
@@ -1755,12 +1790,13 @@ Public Class Form1
         Return False
     End Function
 
-    Private Sub CopyFiles(FileList As String(), ByRef SkipList As List(Of String), RootPath As String, ByRef CurrentIndex As Integer, BatchSize As Integer)
+    Private Sub CopyFiles(FileList As String(), RootPath As String, ByRef CurrentIndex As Integer, BatchSize As Integer)
         Dim CopyCounter As Integer = 0
+        Dim AlphaMode As Integer = LoadedSettings.ExpertSettings.AlphaMode
         Do While CurrentIndex < FileList.Count AndAlso CopyCounter < BatchSize AndAlso Not WorkHorse.CancellationPending
             Dim FilePath As String = FileList(CurrentIndex)
-            If Not SkipList.Contains(FilePath) Then
-                Select Case LoadedSettings.ExpertSettings.AlphaMode
+            If Not IsAlphaFiltered(FilePath, AlphaMode) Then
+                Select Case AlphaMode
                     Case 0
                         File.Copy(FilePath, RootPath & "\" & Path.GetFileName(FilePath), True)
                         CopyCounter += 1
@@ -1769,14 +1805,14 @@ Public Class Form1
                             File.Copy(FilePath, RootPath & "\" & Path.GetFileName(FilePath), True)
                             CopyCounter += 1
                         Else
-                            SkipList.Add(FilePath)
+                            MarkAlphaFiltered(FilePath, AlphaMode)
                         End If
                     Case 2
                         If GetHasTransparency(FilePath) Then
                             File.Copy(FilePath, RootPath & "\" & Path.GetFileName(FilePath), True)
                             CopyCounter += 1
                         Else
-                            Skiplist.Add(filepath)
+                            MarkAlphaFiltered(FilePath, AlphaMode)
                         End If
                 End Select
             End If
@@ -1828,7 +1864,7 @@ Public Class Form1
                         Return
                     End If
                     If LoadedSettings.ExpertSettings.Logging OrElse IsAutoRouteRun OrElse BatchProcess.ExitCode <> 0 Then
-                        WriteProcessLog(BuildProcess, StandardOutput, StandardError, LoadedSettings.Paths.OutputPath, Model.PackageType)
+                        WriteProcessLog(BuildProcess, StandardOutput, StandardError, LoadedSettings.Paths.OutputPath, Model.PackageType, BatchProcess.ExitCode)
                     End If
                     If BatchProcess.ExitCode <> 0 Then
                         Dim Details As String = If(StandardError.Trim() <> "", StandardError.Trim(), StandardOutput.Trim())
@@ -2284,18 +2320,22 @@ Public Class Form1
     End Function
 
     Private Function GetHasTransparency(Source As String) As Boolean
-        Dim SourceImage As Bitmap = GetUnlockedImage(Source)
-        Dim SourceRect As Rectangle = New Rectangle(0, 0, SourceImage.Width, SourceImage.Height)
-        Dim SourceData As Imaging.BitmapData = SourceImage.LockBits(SourceRect, Imaging.ImageLockMode.ReadWrite, SourceImage.PixelFormat)
-        Dim SourcePtr As IntPtr = SourceData.Scan0
-        Dim SourceByteCount As Integer = Math.Abs(SourceData.Stride) * SourceImage.Height
-        Dim SourceBytes As Byte() = New Byte(SourceByteCount - 1) {}
-        Runtime.InteropServices.Marshal.Copy(SourcePtr, SourceBytes, 0, SourceByteCount)
-        For i = 3 To SourceBytes.Length - 1 Step 4
-            If SourceBytes(i) = 0 Then Return True
-        Next
-        SourceImage.UnlockBits(SourceData)
-        SourceImage.Dispose()
+        Using SourceImage As Bitmap = GetUnlockedImage(Source)
+            Dim SourceRect As Rectangle = New Rectangle(0, 0, SourceImage.Width, SourceImage.Height)
+            Dim SourceData As Imaging.BitmapData = Nothing
+            Try
+                SourceData = SourceImage.LockBits(SourceRect, Imaging.ImageLockMode.ReadOnly, SourceImage.PixelFormat)
+                Dim SourcePtr As IntPtr = SourceData.Scan0
+                Dim SourceByteCount As Integer = Math.Abs(SourceData.Stride) * SourceImage.Height
+                Dim SourceBytes As Byte() = New Byte(SourceByteCount - 1) {}
+                Runtime.InteropServices.Marshal.Copy(SourcePtr, SourceBytes, 0, SourceByteCount)
+                For i = 3 To SourceBytes.Length - 1 Step 4
+                    If SourceBytes(i) = 0 Then Return True
+                Next
+            Finally
+                If SourceData IsNot Nothing Then SourceImage.UnlockBits(SourceData)
+            End Try
+        End Using
         Return False
     End Function
 
@@ -2423,6 +2463,105 @@ Public Class Form1
         Return Result.ToArray
     End Function
 
+    Private Function GetPackageInputFileTypes(Package As Object) As HashSet(Of String)
+        If Package Is Nothing Then Return Nothing
+        Dim FileTypesProperty As PropertyInfo = Package.GetType().GetProperty("FileTypes")
+        If FileTypesProperty Is Nothing Then Return Nothing
+        Dim PackageFileTypes As IEnumerable(Of String) = TryCast(FileTypesProperty.GetValue(Package, Nothing), IEnumerable(Of String))
+        If PackageFileTypes Is Nothing Then Return Nothing
+
+        Dim SupportedExtensions As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+        For Each FileType As String In PackageFileTypes
+            If String.IsNullOrWhiteSpace(FileType) Then Continue For
+            Dim NormalizedExtension As String = FileType.Trim()
+            If Not NormalizedExtension.StartsWith(".", StringComparison.Ordinal) Then NormalizedExtension = "." & NormalizedExtension
+            SupportedExtensions.Add(NormalizedExtension)
+        Next
+        If SupportedExtensions.Count = 0 Then Return Nothing
+        Return SupportedExtensions
+    End Function
+
+    Private Function GetActiveInputFileTypes() As HashSet(Of String)
+        If ChainList IsNot Nothing AndAlso ChainList.Count > 0 Then
+            Return GetPackageInputFileTypes(ChainList(0).Package)
+        End If
+
+        Dim BackendName As String = If(ExeComboBox.SelectedItem, "").ToString()
+        If String.IsNullOrWhiteSpace(BackendName) Then Return Nothing
+        Dim PackageType As String = If(BackendName = PLKSRBackendName, "RealPLKSR", BackendName)
+        Try
+            Dim SelectedPackage As New FormSettings.ChainObject(BackendName, 0, "", PackageType, Me)
+            Return GetPackageInputFileTypes(SelectedPackage.Package)
+        Catch ex As Exception
+            ' Leave the input list unfiltered if the selected package is not ready yet.
+            Return Nothing
+        End Try
+    End Function
+
+    Private Function GetSupportedInputFiles(InputFiles As String(), SupportedExtensions As HashSet(Of String)) As String()
+        If InputFiles Is Nothing Then Return New String() {}
+        If SupportedExtensions Is Nothing OrElse SupportedExtensions.Count = 0 Then Return InputFiles
+
+        Dim Result As New List(Of String)
+        For Each InputFile As String In InputFiles
+            If SupportedExtensions.Contains(Path.GetExtension(InputFile)) Then Result.Add(InputFile)
+        Next
+        Return Result.ToArray()
+    End Function
+
+    Private Function GetPendingInputFiles(InputFiles As String(), OutputPath As String, SupportedExtensions As HashSet(Of String),
+                                          AlphaMode As Integer, ByRef UnsupportedCount As Integer,
+                                          ByRef AlphaFilteredCount As Integer, ByRef SupportedCount As Integer,
+                                          ByRef MissingCount As Integer) As String()
+        Dim SupportedFiles As String() = GetSupportedInputFiles(InputFiles, SupportedExtensions)
+        UnsupportedCount = If(InputFiles Is Nothing, 0, InputFiles.Length - SupportedFiles.Length)
+        SupportedCount = SupportedFiles.Length
+        Dim MissingFiles As String() = GetMissingFiles(SupportedFiles, OutputPath)
+        MissingCount = MissingFiles.Length
+        AlphaFilteredCount = 0
+
+        Dim PendingFiles As New List(Of String)
+        For Each MissingFile As String In MissingFiles
+            If IsAlphaFiltered(MissingFile, AlphaMode) Then
+                AlphaFilteredCount += 1
+            Else
+                PendingFiles.Add(MissingFile)
+            End If
+        Next
+        Return PendingFiles.ToArray()
+    End Function
+
+    Private Function GetActiveAlphaMode() As Integer
+        If WorkHorse.IsBusy Then Return LoadedSettings.ExpertSettings.AlphaMode
+        Return Math.Max(0, AlphaComboBox.SelectedIndex)
+    End Function
+
+    Private Function GetAlphaSkipKey(FilePath As String, AlphaMode As Integer) As String
+        Return AlphaMode.ToString(CultureInfo.InvariantCulture) & "|" & Path.GetFullPath(FilePath)
+    End Function
+
+    Private Function IsAlphaFiltered(FilePath As String, AlphaMode As Integer) As Boolean
+        If AlphaMode <= 0 Then Return False
+        Dim SkipKey As String = GetAlphaSkipKey(FilePath, AlphaMode)
+        SyncLock SkipListLock
+            Return SkipList.Contains(SkipKey)
+        End SyncLock
+    End Function
+
+    Private Sub MarkAlphaFiltered(FilePath As String, AlphaMode As Integer)
+        If AlphaMode <= 0 Then Return
+        Dim SkipKey As String = GetAlphaSkipKey(FilePath, AlphaMode)
+        SyncLock SkipListLock
+            SkipList.Add(SkipKey)
+        End SyncLock
+    End Sub
+
+    Private Sub ClearAlphaSkipList()
+        SyncLock SkipListLock
+            SkipList.Clear()
+        End SyncLock
+    End Sub
+
     Private Function GetThreads(Index As Integer, Count As Integer)
         Select Case Index
             Case 0
@@ -2467,9 +2606,9 @@ Public Class Form1
         File.WriteAllText(Filename, Output)
     End Sub
 
-    Private Sub WriteProcessLog(StartInfo As ProcessStartInfo, StandardOutput As String, StandardError As String, SaveLoc As String, BackendName As String)
+    Private Sub WriteProcessLog(StartInfo As ProcessStartInfo, StandardOutput As String, StandardError As String, SaveLoc As String, BackendName As String, ExitCode As Integer)
         Dim Filename As String = Path.Combine(SaveLoc, BackendName & "_" & Now.ToString("yyyy-MM-dd_HH-mm-ss") & ".txt")
-        Dim Output As String = StartInfo.FileName & " " & StartInfo.Arguments & vbNewLine & vbNewLine
+        Dim Output As String = StartInfo.FileName & " " & StartInfo.Arguments & vbNewLine & "Exit code: " & ExitCode.ToString() & vbNewLine & vbNewLine
         Output &= StandardOutput & vbNewLine & vbNewLine & StandardError
         File.WriteAllText(Filename, Output)
     End Sub
