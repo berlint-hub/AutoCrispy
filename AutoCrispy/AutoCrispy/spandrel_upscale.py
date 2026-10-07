@@ -370,6 +370,34 @@ def _upscale_rgb(
     return output
 
 
+def _get_model_tiling_mode(model: Any) -> str | None:
+    """Read Spandrel's tiling recommendation without requiring its enum import."""
+    tiling = getattr(model, "tiling", None)
+    if tiling is None:
+        return None
+    mode = getattr(tiling, "name", None)
+    if mode is None:
+        mode = str(tiling).rsplit(".", 1)[-1]
+    normalized = str(mode).strip().casefold()
+    return normalized or None
+
+
+def _report_model_tiling_metadata(model: Any, model_label: str) -> None:
+    mode = _get_model_tiling_mode(model)
+    if mode == "internal":
+        print(
+            f"{model_label} declares internal tiling; AutoCrispy will bypass "
+            "external tiling and OOM tile retries.",
+            flush=True,
+        )
+    elif mode == "discouraged":
+        print(
+            f"{model_label} discourages external tiling because it may cause "
+            "artifacts; AutoCrispy keeps its configured tile size and OOM fallback.",
+            flush=True,
+        )
+
+
 def _is_out_of_memory(error: RuntimeError) -> bool:
     return "out of memory" in str(error).casefold() or "cuda error: out of memory" in str(
         error
@@ -383,6 +411,11 @@ def _upscale_with_fallback(
 
     if tile_size < 0:
         raise ValueError("Tile size must be zero (untiled) or a positive number of pixels.")
+
+    if _get_model_tiling_mode(model) == "internal":
+        # External tiles can interfere with models that split their own inputs.
+        # Do not retry with external tiles after OOM; trust Spandrel's metadata.
+        return _infer_tile(model, image, device, dtype)
 
     # Zero means try the full image first. If that does not fit in memory,
     # switch to tiled inference and keep reducing the tile size on OOM.
@@ -810,11 +843,15 @@ def _run_auto_route(args: argparse.Namespace) -> int:
     print(
         "AUTOCRISPY_MODELS: "
         f"Architect={args.architect_model.resolve()} "
-        f"(device={architect_device_name}, dtype={architect_dtype}); "
+        f"(device={architect_device_name}, dtype={architect_dtype}, "
+        f"tiling={_get_model_tiling_mode(architect) or 'unknown'}); "
         f"Painter={args.painter_model.resolve()} "
-        f"(device={painter_device_name}, dtype={painter_dtype}).",
+        f"(device={painter_device_name}, dtype={painter_dtype}, "
+        f"tiling={_get_model_tiling_mode(painter) or 'unknown'}).",
         flush=True,
     )
+    _report_model_tiling_metadata(architect, "Architect model")
+    _report_model_tiling_metadata(painter, "Painter model")
 
     routed_files = sorted(
         scored_files,
@@ -918,6 +955,7 @@ def list_supported_models(model_root: Path, debug: bool = False) -> int:
                         encoded_purpose,
                         str(descriptor.input_channels),
                         str(descriptor.output_channels),
+                        (_get_model_tiling_mode(descriptor) or "unknown").upper(),
                     )
                 )
                 print(f"MODEL:{encoded_path}\t{metadata}", flush=True)
@@ -959,8 +997,9 @@ def run(args: argparse.Namespace) -> int:
     display_name = profile[0] if profile is not None else str(model.architecture.id)
     print(
         f"Loaded {args.model.name}: {display_name} x{model.scale} on "
-        f"{device_name} ({dtype})."
+        f"{device_name} ({dtype}; tiling={_get_model_tiling_mode(model) or 'unknown'})."
     )
+    _report_model_tiling_metadata(model, f"Model {args.model.name}")
 
     for index, input_path in enumerate(files, start=1):
         relative_path = input_path.relative_to(args.input)

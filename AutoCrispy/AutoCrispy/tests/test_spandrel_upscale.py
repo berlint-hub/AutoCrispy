@@ -39,6 +39,7 @@ class FakeImageDescriptor:
         output_channels: int = 3,
         architecture: str = "ExampleSR",
         tags: tuple[str, ...] = (),
+        tiling: str = "SUPPORTED",
     ) -> None:
         self.purpose = purpose
         self.scale = scale
@@ -48,6 +49,7 @@ class FakeImageDescriptor:
         self.tags = tags
         self.supports_half = False
         self.supports_bfloat16 = False
+        self.tiling = types.SimpleNamespace(name=tiling)
         self.model = FakeNetwork()
         self.to_args: tuple[object, object] | None = None
 
@@ -115,7 +117,7 @@ class SpandrelRunnerTests(unittest.TestCase):
                 path.touch()
 
             models: dict[str, object] = {
-                "valid.pth": FakeImageDescriptor(),
+                "valid.pth": FakeImageDescriptor(tiling="INTERNAL"),
                 "1x-DXTDecompressor-Source-V3.pth": FakeImageDescriptor(
                     purpose="Restoration", scale=1, architecture="ESRGAN"
                 ),
@@ -158,7 +160,10 @@ class SpandrelRunnerTests(unittest.TestCase):
             self.assertEqual(base64.b64decode(dxt_details[0]).decode("utf-8"), "ESRGAN")
             self.assertEqual(dxt_details[1], "1")
             self.assertEqual(base64.b64decode(dxt_details[2]).decode("utf-8"), "Restoration")
-            self.assertEqual(dxt_details[3:], ["3", "3"])
+            self.assertEqual(dxt_details[3:], ["3", "3", "SUPPORTED"])
+            self.assertEqual(
+                details_by_path[str(files["valid.pth"].resolve())][5], "INTERNAL"
+            )
 
     def test_listing_requires_an_existing_model_folder(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -193,6 +198,66 @@ class SpandrelRunnerTests(unittest.TestCase):
             self.assertEqual(runner._resolve_cpu_threads(8), 8)
         with patch.object(runner.os, "cpu_count", return_value=4):
             self.assertEqual(runner._resolve_cpu_threads(), 4)
+
+    def test_internal_tiling_metadata_bypasses_external_tiles(self) -> None:
+        model = types.SimpleNamespace(tiling=types.SimpleNamespace(name="INTERNAL"))
+        device = FakeDevice("cuda:0")
+        dtype = object()
+        image = object()
+        result = object()
+        fake_torch = types.ModuleType("torch")
+        with (
+            patch.dict(sys.modules, {"torch": fake_torch}),
+            patch.object(runner, "_infer_tile", return_value=result) as infer_tile,
+            patch.object(runner, "_upscale_rgb") as upscale_rgb,
+        ):
+            actual = runner._upscale_with_fallback(
+                image, model, device, dtype, tile_size=512
+            )
+
+        self.assertIs(actual, result)
+        infer_tile.assert_called_once_with(model, image, device, dtype)
+        upscale_rgb.assert_not_called()
+
+    def test_internal_tiling_metadata_does_not_trigger_external_oom_retry(self) -> None:
+        model = types.SimpleNamespace(tiling=types.SimpleNamespace(name="INTERNAL"))
+        device = FakeDevice("cuda:0")
+        fake_torch = types.ModuleType("torch")
+        with (
+            patch.dict(sys.modules, {"torch": fake_torch}),
+            patch.object(
+                runner, "_infer_tile", side_effect=RuntimeError("CUDA out of memory")
+            ),
+            patch.object(runner, "_upscale_rgb") as upscale_rgb,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "out of memory"):
+                runner._upscale_with_fallback(
+                    object(), model, device, object(), tile_size=512
+                )
+
+        upscale_rgb.assert_not_called()
+
+    def test_discouraged_tiling_warns_but_keeps_external_tiling(self) -> None:
+        model = types.SimpleNamespace(tiling=types.SimpleNamespace(name="DISCOURAGED"))
+        device = FakeDevice("cuda:0")
+        dtype = object()
+        image = object()
+        result = object()
+        fake_torch = types.ModuleType("torch")
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            runner._report_model_tiling_metadata(model, "Test model")
+        with (
+            patch.dict(sys.modules, {"torch": fake_torch}),
+            patch.object(runner, "_upscale_rgb", return_value=result) as upscale_rgb,
+        ):
+            actual = runner._upscale_with_fallback(
+                image, model, device, dtype, tile_size=512
+            )
+
+        self.assertIn("discourages external tiling", output.getvalue())
+        self.assertIs(actual, result)
+        upscale_rgb.assert_called_once_with(image, model, device, dtype, 512)
 
     def test_cuda_runtime_enables_cudnn_benchmark_and_tf32(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

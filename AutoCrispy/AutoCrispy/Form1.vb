@@ -96,6 +96,7 @@ Public Class Form1
         Public Property Purpose As String
         Public Property InputChannels As Integer
         Public Property OutputChannels As Integer
+        Public Property Tiling As String = "unknown"
         Public Property IsAutoTextureRouter As Boolean
         Public Property ArchitectModelPath As String
         Public Property PainterModelPath As String
@@ -688,6 +689,7 @@ Public Class Form1
                                         Integer.TryParse(ModelFields(5), OutputChannels)
                                         Model.InputChannels = InputChannels
                                         Model.OutputChannels = OutputChannels
+                                        If ModelFields.Length >= 7 Then Model.Tiling = ModelFields(6)
                                     End If
                                     Result.Add(Model)
                                 End If
@@ -1398,15 +1400,32 @@ Public Class Form1
             UiToolTip.SetToolTip(AutoRoutePreviewSampleCount, "Number of supported textures to sample for a quick read-only route preview.")
             Return
         End If
+        Dim TilingSummary As String = ""
+        Dim TilingTooltip As String = ""
+        Select Case If(Model.Tiling, "").Trim().ToUpperInvariant()
+            Case "INTERNAL"
+                TilingSummary = " · model tiles internally"
+                TilingTooltip = "Spandrel marks this model as internally tiled. AutoCrispy will bypass external tiles and OOM tile retries."
+            Case "DISCOURAGED"
+                TilingSummary = " · external tiling not recommended"
+                TilingTooltip = "Spandrel discourages external tiling because it may cause artifacts. AutoCrispy keeps its configured tile size and OOM fallback."
+            Case "SUPPORTED"
+                TilingSummary = " · external tiling supported"
+                TilingTooltip = "Spandrel marks external tiling as supported."
+            Case Else
+                TilingTooltip = "Spandrel did not report a tiling recommendation."
+        End Select
         If Model.Scale > 0 Then
             Dim ScaleDescription As String = If(Model.Scale = 1, "preserves image dimensions", "enlarges " & Model.Scale.ToString() & "×")
             SpandrelModelInfoLabel.Text = "Architecture: " & Model.Architecture & " · " & Model.Scale.ToString() & "× " & Model.Purpose &
-                " · RGB " & Model.InputChannels.ToString() & "→" & Model.OutputChannels.ToString() & " · " & ScaleDescription
+                " · RGB " & Model.InputChannels.ToString() & "→" & Model.OutputChannels.ToString() & " · " & ScaleDescription & TilingSummary
         Else
-            SpandrelModelInfoLabel.Text = "Architecture: " & Model.Architecture & " · Spandrel-compatible image model"
+            SpandrelModelInfoLabel.Text = "Architecture: " & Model.Architecture & " · Spandrel-compatible image model" & TilingSummary
         End If
-        UiToolTip.SetToolTip(SpandrelModelInfoLabel, Model.FilePath)
-        UiToolTip.SetToolTip(PyModel, Model.FilePath)
+        Dim ModelToolTip As String = Model.FilePath
+        If TilingTooltip <> "" Then ModelToolTip &= Environment.NewLine & TilingTooltip
+        UiToolTip.SetToolTip(SpandrelModelInfoLabel, ModelToolTip)
+        UiToolTip.SetToolTip(PyModel, ModelToolTip)
     End Sub
 
     Private Sub PyModel_SelectedIndexChanged(sender As Object, e As EventArgs) Handles PyModel.SelectedIndexChanged
