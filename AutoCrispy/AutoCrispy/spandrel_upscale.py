@@ -12,8 +12,10 @@ import argparse
 import base64
 import gc
 import math
+import os
 import sys
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +41,8 @@ SUPPORTED_GENERIC_SCALES = {1, MODEL_SCALE}
 TILE_OVERLAP = 32
 MODEL_FILE_EXTENSIONS = {".pth", ".pt", ".ckpt", ".safetensors"}
 AUTO_ROUTE_MIN_PAINTER_SCORE = 0.34
+DEFAULT_CPU_THREAD_LIMIT = 16
+_CONFIGURED_TORCH_MODULE: Any = None
 
 
 def _has_supported_generic_purpose(descriptor: Any) -> bool:
@@ -82,7 +86,7 @@ def parse_args() -> argparse.Namespace:
         "--painter-share",
         type=int,
         default=30,
-        help="Maximum Painter share for batches of 10+ images (default: 30 percent)",
+        help="Strict maximum Painter share for every batch; floored to whole images (default: 30 percent)",
     )
     parser.add_argument(
         "--painter-threshold",
@@ -95,8 +99,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--tile-size",
         type=int,
-        default=512,
-        help="Maximum input tile edge in pixels (default: 512; 0 tries full-image inference)",
+        default=1024,
+        help="Maximum input tile edge in pixels (default: 1024; 0 tries full-image inference)",
+    )
+    parser.add_argument(
+        "--cpu-threads",
+        type=int,
+        default=0,
+        help="CPU worker threads for analysis/inference (0 uses up to 16; default: auto)",
     )
     parser.add_argument(
         "--cpu", action="store_true", help="Force CPU inference instead of CUDA"
@@ -110,6 +120,8 @@ def parse_args() -> argparse.Namespace:
         "--debug", action="store_true", help="Print a full traceback on errors"
     )
     args = parser.parse_args()
+    if args.cpu_threads < 0:
+        parser.error("--cpu-threads must be 0 (automatic) or a positive number")
     if args.preview_route:
         if args.list_models is not None:
             parser.error("Do not combine --preview-route with --list-models")
@@ -140,8 +152,54 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
+def _resolve_cpu_threads(requested: int = 0) -> int:
+    if requested < 0:
+        raise ValueError("CPU thread count must be 0 (automatic) or a positive number.")
+    available = max(1, os.cpu_count() or 1)
+    return min(requested if requested > 0 else DEFAULT_CPU_THREAD_LIMIT, available)
+
+
+def _configure_torch_runtime(torch: Any, device: Any, cpu_threads: int = 0) -> int:
+    """Set conservative CPU parallelism and enable safe Ada/CUDA fast paths."""
+    global _CONFIGURED_TORCH_MODULE
+    thread_count = _resolve_cpu_threads(cpu_threads)
+    if _CONFIGURED_TORCH_MODULE is torch:
+        return thread_count
+
+    set_num_threads = getattr(torch, "set_num_threads", None)
+    if callable(set_num_threads):
+        set_num_threads(thread_count)
+    set_interop_threads = getattr(torch, "set_num_interop_threads", None)
+    if callable(set_interop_threads):
+        try:
+            # Inference is sequential; one inter-op worker avoids over-subscribing
+            # the 16 intra-op CPU workers on high-core-count desktop CPUs.
+            set_interop_threads(1)
+        except RuntimeError:
+            # PyTorch only permits this setting before parallel work has started.
+            pass
+
+    if getattr(device, "type", "") == "cuda":
+        backends = getattr(torch, "backends", None)
+        cudnn = getattr(backends, "cudnn", None)
+        if cudnn is not None:
+            cudnn.benchmark = True
+            if hasattr(cudnn, "allow_tf32"):
+                cudnn.allow_tf32 = True
+        cuda_backend = getattr(backends, "cuda", None)
+        matmul = getattr(cuda_backend, "matmul", None)
+        if matmul is not None and hasattr(matmul, "allow_tf32"):
+            matmul.allow_tf32 = True
+
+    _CONFIGURED_TORCH_MODULE = torch
+    return thread_count
+
+
 def _load_model(
-    model_path: Path, force_cpu: bool, generic_model: bool = False
+    model_path: Path,
+    force_cpu: bool,
+    generic_model: bool = False,
+    cpu_threads: int = 0,
 ) -> tuple[Any, Any, Any, str]:
     try:
         import torch
@@ -163,6 +221,7 @@ def _load_model(
     device = torch.device(
         "cpu" if force_cpu or not torch.cuda.is_available() else "cuda:0"
     )
+    _configure_torch_runtime(torch, device, cpu_threads)
     descriptor = ModelLoader(device).load_from_file(model_path)
     if not isinstance(descriptor, ImageModelDescriptor):
         raise ValueError("The selected checkpoint is not an image super-resolution model.")
@@ -216,7 +275,17 @@ def _load_model(
 
     descriptor.to(device, dtype)
     descriptor.model.eval()
-    return descriptor, device, dtype, str(device)
+    device_name = str(device)
+    if device.type == "cuda":
+        get_device_name = getattr(torch.cuda, "get_device_name", None)
+        if callable(get_device_name):
+            try:
+                gpu_name = get_device_name(device)
+                if gpu_name:
+                    device_name = f"{device_name} ({gpu_name})"
+            except (RuntimeError, TypeError):
+                pass
+    return descriptor, device, dtype, device_name
 
 
 def _infer_tile(model: Any, image: Any, device: Any, dtype: Any) -> Any:
@@ -546,13 +615,21 @@ def _preview_auto_route(args: argparse.Namespace) -> int:
     files = available_files[:preview_limit] if preview_limit else available_files
     scored_files: list[tuple[Path, dict[str, float]]] = []
     report_interval = max(1, len(files) // 100)
-    for index, input_path in enumerate(files, start=1):
-        if index == 1 or index % report_interval == 0 or index == len(files):
-            print(
-                f"AUTOCRISPY_PROGRESS: {index}/{len(files)} · Analyzing texture · {input_path.name}",
-                flush=True,
-            )
-        scored_files.append((input_path, _texture_features(input_path)))
+    if files:
+        worker_count = min(
+            _resolve_cpu_threads(getattr(args, "cpu_threads", 0)), len(files)
+        )
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            feature_results = executor.map(_texture_features, files)
+            for index, (input_path, features) in enumerate(
+                zip(files, feature_results), start=1
+            ):
+                if index == 1 or index % report_interval == 0 or index == len(files):
+                    print(
+                        f"AUTOCRISPY_PROGRESS: {index}/{len(files)} · Analyzing texture · {input_path.name}",
+                        flush=True,
+                    )
+                scored_files.append((input_path, features))
 
     painter_files = _select_painter_files(
         scored_files, args.painter_share, args.painter_threshold
@@ -600,11 +677,12 @@ def _run_auto_route(args: argparse.Namespace) -> int:
     if args.architect_model.resolve() == args.painter_model.resolve():
         raise ValueError("Architect and Painter must be different checkpoints.")
 
+    cpu_threads = getattr(args, "cpu_threads", 0)
     architect, architect_device, architect_dtype, architect_device_name = _load_model(
-        args.architect_model, args.cpu, generic_model=True
+        args.architect_model, args.cpu, generic_model=True, cpu_threads=cpu_threads
     )
     painter, painter_device, painter_dtype, painter_device_name = _load_model(
-        args.painter_model, args.cpu, generic_model=True
+        args.painter_model, args.cpu, generic_model=True, cpu_threads=cpu_threads
     )
     if architect.scale != MODEL_SCALE or painter.scale != MODEL_SCALE:
         raise ValueError("Automatic Architect/Painter routing requires two 4x RGB models.")
@@ -618,13 +696,18 @@ def _run_auto_route(args: argparse.Namespace) -> int:
 
     scored_files: list[tuple[Path, dict[str, float]]] = []
     report_interval = max(1, len(files) // 100)
-    for index, input_path in enumerate(files, start=1):
-        if index == 1 or index % report_interval == 0 or index == len(files):
-            print(
-                f"AUTOCRISPY_PROGRESS: {index}/{len(files)} · Analyzing texture · {input_path.name}",
-                flush=True,
-            )
-        scored_files.append((input_path, _texture_features(input_path)))
+    worker_count = min(_resolve_cpu_threads(cpu_threads), len(files))
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        feature_results = executor.map(_texture_features, files)
+        for index, (input_path, features) in enumerate(
+            zip(files, feature_results), start=1
+        ):
+            if index == 1 or index % report_interval == 0 or index == len(files):
+                print(
+                    f"AUTOCRISPY_PROGRESS: {index}/{len(files)} · Analyzing texture · {input_path.name}",
+                    flush=True,
+                )
+            scored_files.append((input_path, features))
     painter_threshold = getattr(
         args, "painter_threshold", AUTO_ROUTE_MIN_PAINTER_SCORE
     )
@@ -775,7 +858,10 @@ def run(args: argparse.Namespace) -> int:
     args.output.mkdir(parents=True, exist_ok=True)
 
     model, device, dtype, device_name = _load_model(
-        args.model, args.cpu, args.generic_model
+        args.model,
+        args.cpu,
+        args.generic_model,
+        getattr(args, "cpu_threads", 0),
     )
     profile = MODEL_PROFILES.get(args.model.name.casefold())
     display_name = profile[0] if profile is not None else str(model.architecture.id)

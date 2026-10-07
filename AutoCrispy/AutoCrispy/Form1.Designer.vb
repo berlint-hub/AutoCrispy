@@ -926,7 +926,7 @@ Partial Class Form1
         Me.AutoPainterShareSuffix.Name = "AutoPainterShareSuffix"
         Me.AutoPainterShareSuffix.Size = New System.Drawing.Size(98, 20)
         Me.AutoPainterShareSuffix.TabIndex = 12
-        Me.AutoPainterShareSuffix.Text = "10+ files only"
+        Me.AutoPainterShareSuffix.Text = "strict cap (floored)"
         Me.AutoPainterShareSuffix.Visible = False
         '
         'AutoPainterThresholdLabel
@@ -1067,7 +1067,7 @@ Partial Class Form1
         Me.PyTileSize.Name = "PyTileSize"
         Me.PyTileSize.Size = New System.Drawing.Size(130, 26)
         Me.PyTileSize.TabIndex = 4
-        Me.PyTileSize.Value = New Decimal(New Integer() {512, 0, 0, 0})
+        Me.PyTileSize.Value = New Decimal(New Integer() {1024, 0, 0, 0})
         '
         'PyModel
         '
@@ -1110,7 +1110,7 @@ Partial Class Form1
         Me.TileSizeHint.Name = "TileSizeHint"
         Me.TileSizeHint.Size = New System.Drawing.Size(570, 20)
         Me.TileSizeHint.TabIndex = 6
-        Me.TileSizeHint.Text = "0 = full image first; retries smaller tiles on GPU memory errors."
+        Me.TileSizeHint.Text = "1024 is recommended for 16 GB GPUs; retries smaller tiles on GPU OOM."
         '
         'SpandrelModelInfoLabel
         '

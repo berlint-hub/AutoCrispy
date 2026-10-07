@@ -64,6 +64,16 @@ class SpandrelRunnerTests(unittest.TestCase):
         torch.float32 = object()
         torch.float16 = object()
         torch.bfloat16 = object()
+        torch.configured_num_threads = None
+        torch.configured_interop_threads = None
+        torch.set_num_threads = lambda count: setattr(torch, "configured_num_threads", count)
+        torch.set_num_interop_threads = lambda count: setattr(torch, "configured_interop_threads", count)
+        torch.backends = types.SimpleNamespace(
+            cudnn=types.SimpleNamespace(benchmark=False, allow_tf32=False),
+            cuda=types.SimpleNamespace(
+                matmul=types.SimpleNamespace(allow_tf32=False)
+            ),
+        )
 
         spandrel = types.ModuleType("spandrel")
         spandrel.ImageModelDescriptor = FakeImageDescriptor
@@ -173,7 +183,30 @@ class SpandrelRunnerTests(unittest.TestCase):
             self.assertEqual(device.type, "cpu")
             self.assertEqual(device_name, "cpu")
             self.assertEqual(descriptor.to_args, (device, dtype))
+            self.assertEqual(torch.configured_num_threads, runner._resolve_cpu_threads())
+            self.assertEqual(torch.configured_interop_threads, 1)
             self.assertTrue(descriptor.model.evaluated)
+
+    def test_cpu_thread_auto_uses_up_to_16_and_honors_an_override(self) -> None:
+        with patch.object(runner.os, "cpu_count", return_value=32):
+            self.assertEqual(runner._resolve_cpu_threads(), 16)
+            self.assertEqual(runner._resolve_cpu_threads(8), 8)
+        with patch.object(runner.os, "cpu_count", return_value=4):
+            self.assertEqual(runner._resolve_cpu_threads(), 4)
+
+    def test_cuda_runtime_enables_cudnn_benchmark_and_tf32(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkpoint = Path(temporary) / "fast-model.pth"
+            checkpoint.touch()
+            descriptor = FakeImageDescriptor(architecture="SomeRegisteredSR")
+            torch, spandrel = self.make_fake_modules({checkpoint.name: descriptor})
+            torch.cuda = types.SimpleNamespace(is_available=lambda: True)
+            with patch.dict(sys.modules, {"torch": torch, "spandrel": spandrel}):
+                runner._load_model(checkpoint, force_cpu=False, generic_model=True)
+
+            self.assertTrue(torch.backends.cudnn.benchmark)
+            self.assertTrue(torch.backends.cudnn.allow_tf32)
+            self.assertTrue(torch.backends.cuda.matmul.allow_tf32)
 
     def test_cuda_uses_float32_when_checkpoint_only_advertises_bfloat16(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -266,7 +299,9 @@ class SpandrelRunnerTests(unittest.TestCase):
                 debug=False,
             )
 
-            def fake_load_model(path: Path, _force_cpu: bool, generic_model: bool):
+            def fake_load_model(
+                path: Path, _force_cpu: bool, generic_model: bool, cpu_threads: int = 0
+            ):
                 model = architect if path == architect_path else painter
                 return model, FakeDevice("cuda:0"), "float32", "cuda:0"
 
@@ -360,6 +395,8 @@ class SpandrelRunnerTests(unittest.TestCase):
             ):
                 args = runner.parse_args()
             self.assertFalse(args.auto_route)
+            self.assertEqual(args.tile_size, 1024)
+            self.assertEqual(args.cpu_threads, 0)
             self.assertEqual(args.model, model_path)
             self.assertIsNone(args.architect_model)
             self.assertIsNone(args.painter_model)
@@ -389,6 +426,21 @@ class SpandrelRunnerTests(unittest.TestCase):
             self.assertEqual(args.painter_share, 45)
             self.assertAlmostEqual(args.painter_threshold, 0.27)
             self.assertEqual(args.preview_limit, 7)
+
+    def test_preview_route_handles_folders_without_supported_images(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            args = types.SimpleNamespace(
+                input=Path(temporary),
+                painter_share=30,
+                painter_threshold=0.34,
+            )
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                result = runner._preview_auto_route(args)
+
+            self.assertEqual(result, 0)
+            self.assertIn("total=0; Architect=0; Painter=0", output.getvalue())
+            self.assertIn("Sample=all 0", output.getvalue())
 
     def test_preview_route_reports_feature_scores_and_assignments_without_loading_models(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -476,7 +528,7 @@ class SpandrelRunnerTests(unittest.TestCase):
                 result = runner._preview_auto_route(args)
 
             self.assertEqual(result, 0)
-            self.assertEqual(analyzed, [first, second])
+            self.assertCountEqual(analyzed, [first, second])
             self.assertNotIn(third, analyzed)
             self.assertNotIn(unsupported, analyzed)
             self.assertIn("total=2; Architect=2; Painter=0", output.getvalue())

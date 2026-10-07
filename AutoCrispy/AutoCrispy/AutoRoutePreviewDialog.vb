@@ -1,5 +1,6 @@
 Imports System.Globalization
 Imports System.IO
+Imports System.Text
 
 Friend Class AutoRoutePreviewItem
     Public Property FilePath As String
@@ -27,6 +28,7 @@ Friend NotInheritable Class AutoRoutePreviewDialog
     Private ReadOnly _painterList As New ListBox()
     Private ReadOnly _architectList As New ListBox()
     Private ReadOnly _items As List(Of AutoRoutePreviewItem)
+    Private ReadOnly _sourceFolder As String
 
     Public Sub New(PreviewItems As IEnumerable(Of AutoRoutePreviewItem), SourceFolder As String,
                    SampleLimit As Integer, PainterShare As Integer, PainterThreshold As Double,
@@ -36,6 +38,7 @@ Friend NotInheritable Class AutoRoutePreviewDialog
         Else
             _items = PreviewItems.ToList()
         End If
+        _sourceFolder = If(SourceFolder, String.Empty)
 
         Text = "Auto Texture Routing preview"
         StartPosition = FormStartPosition.CenterParent
@@ -53,7 +56,7 @@ Friend NotInheritable Class AutoRoutePreviewDialog
             .AutoEllipsis = True,
             .Padding = New Padding(10, 6, 10, 4),
             .Text = String.Format(CultureInfo.InvariantCulture,
-                "Read-only sample: first up to {1} supported images by path ({2} analyzed) · Painter {3} · Architect {4} · cap {5}% for 10+ · threshold {6:0.00}{0}" &
+                "Read-only sample: first up to {1} supported images by path ({2} analyzed) · Painter {3} · Architect {4} · strict cap {5}% (floored) · threshold {6:0.00}{0}" &
                 "Folder: {7}{0}" &
                 "Painter model: {8}    |    Architect model: {9}{0}" &
                 "Score = 0.08×detail + 0.05×normalized edge score + 0.15×direction entropy + 0.60×patterns + 0.12×repetition×patterns.{0}" &
@@ -118,6 +121,14 @@ Friend NotInheritable Class AutoRoutePreviewDialog
             .DialogResult = DialogResult.OK,
             .Margin = New Padding(4)
         }
+        Dim ExportButton As New Button With {
+            .Text = "Export CSV…",
+            .Enabled = _items.Count > 0,
+            .Width = 112,
+            .Height = 30,
+            .Margin = New Padding(4)
+        }
+        AddHandler ExportButton.Click, AddressOf ExportCsvClicked
         Dim ButtonPanel As New FlowLayoutPanel With {
             .Dock = DockStyle.Fill,
             .FlowDirection = FlowDirection.RightToLeft,
@@ -125,6 +136,7 @@ Friend NotInheritable Class AutoRoutePreviewDialog
             .Padding = New Padding(0, 3, 4, 3)
         }
         ButtonPanel.Controls.Add(CloseButton)
+        ButtonPanel.Controls.Add(ExportButton)
 
         Dim Layout As New TableLayoutPanel With {
             .Dock = DockStyle.Fill,
@@ -151,6 +163,54 @@ Friend NotInheritable Class AutoRoutePreviewDialog
             _featureDetails.Text = "No supported image textures were found in this folder."
         End If
     End Sub
+
+    Private Sub ExportCsvClicked(sender As Object, e As EventArgs)
+        Using SaveDialog As New SaveFileDialog With {
+            .Title = "Export route preview",
+            .Filter = "CSV files (*.csv)|*.csv",
+            .DefaultExt = "csv",
+            .AddExtension = True,
+            .FileName = "AutoCrispy-route-preview.csv",
+            .InitialDirectory = If(Directory.Exists(_sourceFolder), _sourceFolder, Application.StartupPath)
+        }
+            If SaveDialog.ShowDialog(Me) <> DialogResult.OK Then Return
+
+            Try
+                Dim Csv As New StringBuilder()
+                Csv.AppendLine("File path,Role,Score,Decision,Detail,Edge density,Direction entropy,Local pattern entropy,Periodicity")
+                Dim OrderedItems As IEnumerable(Of AutoRoutePreviewItem) = _items.OrderBy(
+                    Function(Value) Value.FilePath, StringComparer.OrdinalIgnoreCase).ThenBy(
+                    Function(Value) Value.FilePath, StringComparer.Ordinal)
+                For Each Item As AutoRoutePreviewItem In OrderedItems
+                    Csv.AppendLine(String.Join(",", New String() {
+                        EscapeCsv(Item.FilePath),
+                        EscapeCsv(Item.Role),
+                        Item.Score.ToString("0.000000", CultureInfo.InvariantCulture),
+                        EscapeCsv(Item.DecisionReason),
+                        Item.Detail.ToString("0.000000", CultureInfo.InvariantCulture),
+                        Item.EdgeDensity.ToString("0.000000", CultureInfo.InvariantCulture),
+                        Item.OrientationEntropy.ToString("0.000000", CultureInfo.InvariantCulture),
+                        Item.LocalPatternEntropy.ToString("0.000000", CultureInfo.InvariantCulture),
+                        Item.Periodicity.ToString("0.000000", CultureInfo.InvariantCulture)
+                    }))
+                Next
+
+                Using Writer As New StreamWriter(SaveDialog.FileName, False, New UTF8Encoding(True))
+                    Writer.Write(Csv.ToString())
+                End Using
+                MessageBox.Show(Me, _items.Count.ToString() & " route assignment(s) exported.",
+                    "Route preview exported", MessageBoxButtons.OK, MessageBoxIcon.Information)
+            Catch ex As Exception
+                MessageBox.Show(Me, "Could not export the route preview." & Environment.NewLine & ex.Message,
+                    "Export failed", MessageBoxButtons.OK, MessageBoxIcon.Error)
+            End Try
+        End Using
+    End Sub
+
+    Private Shared Function EscapeCsv(Value As String) As String
+        Dim Quote As String = ControlChars.Quote.ToString()
+        Return Quote & If(Value, String.Empty).Replace(Quote, Quote & Quote) & Quote
+    End Function
 
     Private Shared Sub ConfigureList(Source As ListBox)
         Source.Dock = DockStyle.Fill

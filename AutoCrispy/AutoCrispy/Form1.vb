@@ -1329,11 +1329,13 @@ Public Class Form1
             Dim PainterPath As String = GetSelectedAutoRouteModelPath(AutoPainterModelComboBox)
             If ArchitectPath = "" Then ArchitectPath = Model.ArchitectModelPath
             If PainterPath = "" Then PainterPath = Model.PainterModelPath
-            AutoPainterShareSuffix.Text = "cap for batches of 10+"
+            AutoPainterShareSuffix.Text = "strict cap (floored)"
             AutoPainterThresholdSuffix.Text = "below uses Architect"
-            SpandrelModelInfoLabel.Text = "Auto Texture Routing: feature-based; " & PainterShareText & "% max to Painter for 10+ textures; scores below " & PainterThresholdText & " use Architect."
+            SpandrelModelInfoLabel.Text = "Auto Texture Routing: feature-based; at most " & PainterShareText &
+                "% to Painter (floored to whole textures); scores below " & PainterThresholdText & " use Architect."
             Dim RouterTooltip As String = "Feature-based routing (not semantic object recognition)." & Environment.NewLine &
-                "For batches under 10 images, every texture meeting the minimum score is sent to Painter. Larger batches rank eligible textures by score and cap Painter at the selected share." & Environment.NewLine &
+                "The Painter cap applies to every batch: max Painter count = floor(texture count × share / 100)." & Environment.NewLine &
+                "For example, a 30% cap on two textures allows zero Painter assignments. Eligible textures beyond the cap use Architect." & Environment.NewLine &
                 "Minimum Painter score: " & PainterThresholdText & Environment.NewLine &
                 "Architect model: " & ArchitectPath & Environment.NewLine &
                 "Painter model: " & PainterPath & Environment.NewLine &
@@ -1342,7 +1344,7 @@ Public Class Form1
             UiToolTip.SetToolTip(PyModel, RouterTooltip)
             UiToolTip.SetToolTip(AutoArchitectModelComboBox, ArchitectPath)
             UiToolTip.SetToolTip(AutoPainterModelComboBox, PainterPath)
-            UiToolTip.SetToolTip(AutoPainterSharePercent, "Maximum Painter share for batches of 10 or more textures. Smaller batches use the score threshold without a percentage cap.")
+            UiToolTip.SetToolTip(AutoPainterSharePercent, "Strict maximum Painter share for every batch. The allowed count is floored to a whole number of textures; small batches can therefore allow zero Painter images.")
             UiToolTip.SetToolTip(AutoPainterThresholdLabel, "Textures below this feature score are assigned to Architect. This is a feature heuristic, not semantic classification.")
             UiToolTip.SetToolTip(AutoPainterThreshold, "Minimum feature score for Painter eligibility (0.05–1.00). Lower values make more textures eligible.")
             UiToolTip.SetToolTip(AutoRoutePreviewSampleLabel, "Analyze the first N supported textures, sorted by relative path. Preview is read-only.")
