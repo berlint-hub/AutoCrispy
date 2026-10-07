@@ -58,6 +58,7 @@
         Source.InputTextBox.Text = LoadedSettings.Paths.InputPath
         Source.OutputTextBox.Text = LoadedSettings.Paths.OutputPath
         Source.ExeTextBox.Text = LoadedSettings.Paths.ExePath
+        Source.LoadGamePathProfiles(LoadedSettings.GamePathProfiles, LoadedSettings.GamePathProfilesConfigured)
 
         'Load Basic UI Settings
         Source.ThreadComboBox.SelectedIndex = LoadedSettings.BasicSettings.ThreadIndex
@@ -119,6 +120,7 @@
     <Xml.Serialization.XmlInclude(GetType(ProgramSettings))>
     <Xml.Serialization.XmlInclude(GetType(AdvancedSettings))>
     <Xml.Serialization.XmlInclude(GetType(ChainObject))>
+    <Xml.Serialization.XmlInclude(GetType(GamePathProfile))>
     <Serializable()> Public Structure Settings
         Public Property CaffePak As Waifu2xCaffePackage
         Public Property VulkanPak As VulkanNcnnPackage
@@ -128,6 +130,8 @@
         Public Property xBRZPak As xBRZPackage
         Public Property PythonPak As PythonPackage
         Public Property Paths As ProgramPaths
+        Public Property GamePathProfiles As List(Of GamePathProfile)
+        Public Property GamePathProfilesConfigured As Boolean
         Public Property BasicSettings As ProgramSettings
         Public Property ExpertSettings As AdvancedSettings
         Public Property Chain As List(Of ChainObject)
@@ -140,6 +144,8 @@
             xBRZPak = New xBRZPackage(Source.xBRZScale.Value)
             PythonPak = Source.GetSelectedPythonPackage()
             Paths = New ProgramPaths(Source.InputTextBox.Text, Source.OutputTextBox.Text, Source.ExeTextBox.Text)
+            GamePathProfiles = Source.GetGamePathProfileSnapshot()
+            GamePathProfilesConfigured = True
             BasicSettings = New ProgramSettings(Source.ExeComboBox.SelectedItem, Source.ThreadComboBox.SelectedIndex, Source.NumericThreads.Value, Source.DefringeCheck.Checked, Source.PS2Check.Checked, Source.DefringeThresh.Value, Source.TabGroup.SelectedIndex)
             ExpertSettings = New AdvancedSettings(Source.DebugCheckbox.Checked, Source.ExpertSettingsBox.Text, Source.CleanupCheckBox.Checked, Source.SeamsBox.SelectedIndex, Source.SeamScale.Value, Source.SeamMargin.Value, Source.AlphaComboBox.SelectedIndex, Source.HotKeyCheckbox.Checked, Source.PortableCheckBox.Checked)
             Chain = Source.ChainList
@@ -151,6 +157,27 @@
             Return ""
         End Function
     End Structure
+
+    <Serializable()> Public Class GamePathProfile
+        Public Property Name As String
+        Public Property InputPath As String
+        Public Property OutputPath As String
+        Public Property Enabled As Boolean
+
+        Public Sub New()
+            Name = ""
+            InputPath = ""
+            OutputPath = ""
+            Enabled = True
+        End Sub
+
+        Public Sub New(_Name As String, _InputPath As String, _OutputPath As String, Optional _Enabled As Boolean = True)
+            Name = _Name
+            InputPath = _InputPath
+            OutputPath = _OutputPath
+            Enabled = _Enabled
+        End Sub
+    End Class
 
     <Serializable()> Public Structure ProgramPaths
         Public Property InputPath As String

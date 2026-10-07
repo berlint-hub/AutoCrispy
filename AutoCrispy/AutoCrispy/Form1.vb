@@ -1,5 +1,6 @@
 Imports System.IO
 Imports System.Reflection
+Imports System.ComponentModel
 Imports System.Threading
 Imports System.Threading.Tasks
 
@@ -15,6 +16,8 @@ Public Class Form1
     Dim SkipList As New List(Of String)
     Private LastSelectedSpandrelModelPath As String = ""
     Private ReadOnly UiToolTip As New ToolTip()
+    Private ReadOnly GamePathProfiles As New BindingList(Of FormSettings.GamePathProfile)
+    Private CurrentRunGamePaths As List(Of FormSettings.GamePathProfile)
 
     Const HotToggle As String = "%`"
 
@@ -150,6 +153,79 @@ Public Class Form1
             File.WriteAllText(AppData & "\AutoCrispy\settings.xml", Serialize(New FormSettings.Settings(Me)))
         End If
         UiToolTip.Dispose()
+    End Sub
+
+    Public Sub LoadGamePathProfiles(SavedProfiles As List(Of FormSettings.GamePathProfile), ProfilesConfigured As Boolean)
+        GamePathProfiles.Clear()
+        If SavedProfiles IsNot Nothing Then
+            For Each SavedProfile As FormSettings.GamePathProfile In SavedProfiles
+                If SavedProfile IsNot Nothing Then
+                    GamePathProfiles.Add(CloneGamePathProfile(SavedProfile))
+                End If
+            Next
+        End If
+
+        ' Migrate the legacy single-pair settings once, so existing users retain their setup.
+        If GamePathProfiles.Count = 0 AndAlso Not ProfilesConfigured AndAlso
+            Not String.IsNullOrWhiteSpace(InputTextBox.Text) AndAlso Not String.IsNullOrWhiteSpace(OutputTextBox.Text) Then
+            GamePathProfiles.Add(New FormSettings.GamePathProfile(GetGamePathProfileName(InputTextBox.Text), InputTextBox.Text, OutputTextBox.Text, True))
+        End If
+        UpdateGamePathsSummary()
+    End Sub
+
+    Public Function GetGamePathProfileSnapshot() As List(Of FormSettings.GamePathProfile)
+        Dim Snapshot As New List(Of FormSettings.GamePathProfile)
+        For Each Profile As FormSettings.GamePathProfile In GamePathProfiles
+            Snapshot.Add(CloneGamePathProfile(Profile))
+        Next
+        Return Snapshot
+    End Function
+
+    Private Shared Function CloneGamePathProfile(Profile As FormSettings.GamePathProfile) As FormSettings.GamePathProfile
+        Return New FormSettings.GamePathProfile(Profile.Name, Profile.InputPath, Profile.OutputPath, Profile.Enabled)
+    End Function
+
+    Private Shared Function GetGamePathProfileName(InputPath As String) As String
+        If String.IsNullOrWhiteSpace(InputPath) Then Return "Game"
+        Dim TrimmedPath As String = InputPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+        Dim FolderName As String = Path.GetFileName(TrimmedPath)
+        If String.IsNullOrWhiteSpace(FolderName) Then Return InputPath
+        Return FolderName
+    End Function
+
+    Private Function GetEffectiveGamePathProfiles() As List(Of FormSettings.GamePathProfile)
+        Dim Profiles As New List(Of FormSettings.GamePathProfile)
+        If GamePathProfiles.Count > 0 Then
+            For Each Profile As FormSettings.GamePathProfile In GamePathProfiles
+                If Profile.Enabled Then Profiles.Add(CloneGamePathProfile(Profile))
+            Next
+            Return Profiles
+        End If
+
+        ' Keep the original single input/output fields as a fallback when no profiles are saved.
+        If Not String.IsNullOrWhiteSpace(InputTextBox.Text) OrElse Not String.IsNullOrWhiteSpace(OutputTextBox.Text) Then
+            Profiles.Add(New FormSettings.GamePathProfile(GetGamePathProfileName(InputTextBox.Text), InputTextBox.Text, OutputTextBox.Text, True))
+        End If
+        Return Profiles
+    End Function
+
+    Private Sub UpdateGamePathsSummary()
+        If GamePathProfiles.Count = 0 Then
+            GamePathsSummaryLabel.Text = "No saved game profiles; using the Input/Output folders above."
+            Return
+        End If
+        Dim EnabledCount As Integer = 0
+        For Each Profile As FormSettings.GamePathProfile In GamePathProfiles
+            If Profile.Enabled Then EnabledCount += 1
+        Next
+        GamePathsSummaryLabel.Text = EnabledCount.ToString() & " of " & GamePathProfiles.Count.ToString() & " game profiles checked; only checked profiles are watched."
+    End Sub
+
+    Private Sub ManageGamePathsButton_Click(sender As Object, e As EventArgs) Handles ManageGamePathsButton.Click
+        Using Dialog As New GamePathProfilesDialog(GamePathProfiles, InputTextBox.Text, OutputTextBox.Text)
+            Dialog.ShowDialog(Me)
+        End Using
+        UpdateGamePathsSummary()
     End Sub
 
     Private Sub StartUpCheckEXE()
@@ -728,26 +804,41 @@ Public Class Form1
     End Sub
 
     Private Sub RunOnceButton_Click(sender As Object, e As EventArgs) Handles RunOnceButton.Click
-        Using OFD As New OpenFileDialog With {.Filter = "Image Files|*.png;*.jpg;*.bmp"}
-            If OFD.ShowDialog = DialogResult.OK Then
+        If WorkHorse.IsBusy Then Return
+
+        Dim WatcherWasEnabled As Boolean = WatchDog.Enabled
+        If WatcherWasEnabled Then WatchDog.Stop()
+        Dim RunStarted As Boolean = False
+        Try
+            Using OFD As New OpenFileDialog With {.Filter = "Image Files|*.png;*.jpg;*.bmp"}
+                If OFD.ShowDialog() <> DialogResult.OK Then Return
                 Using SFD As New SaveFileDialog With {.Filter = "PNG Images|*.png"}
-                    If SFD.ShowDialog = DialogResult.OK Then
-                        Dim TempPath As String = Path.GetTempPath & "Single_0"
-                        Directory.CreateDirectory(Path.GetTempPath & "Single_0")
-                        File.Copy(OFD.FileName, TempPath & "\" & Path.GetFileName(SFD.FileName), True)
-                        QueueActivityLabel.Text = "Starting one-off image run…"
-                        LoadedSettings = New FormSettings.Settings(Me)
-                        LoadedSettings.Paths = New FormSettings.ProgramPaths(TempPath, Directory.GetParent(SFD.FileName).FullName, Root)
-                        If ChainControl.ListItems.Count = 0 Then
-                            AddModelToChain(ExeComboBox.SelectedItem, False)
-                        End If
-                        SwitchGroups(False)
-                        ProgressPollTimer.Interval = 1000
-                        WorkHorse.RunWorkerAsync()
+                    If SFD.ShowDialog() <> DialogResult.OK Then Return
+
+                    Dim TempPath As String = Path.Combine(Path.GetTempPath(), "Single_0")
+                    Directory.CreateDirectory(TempPath)
+                    File.Copy(OFD.FileName, Path.Combine(TempPath, Path.GetFileName(SFD.FileName)), True)
+                    Dim OutputPath As String = Directory.GetParent(SFD.FileName).FullName
+                    QueueActivityLabel.Text = "Starting one-off image run…"
+                    LoadedSettings = New FormSettings.Settings(Me)
+                    LoadedSettings.Paths = New FormSettings.ProgramPaths(TempPath, OutputPath, Root)
+                    CurrentRunGamePaths = New List(Of FormSettings.GamePathProfile) From {
+                        New FormSettings.GamePathProfile("One-off", TempPath, OutputPath, True)
+                    }
+                    If ChainControl.ListItems.Count = 0 Then
+                        AddModelToChain(ExeComboBox.SelectedItem, False)
                     End If
+                    SwitchGroups(False)
+                    ProgressPollTimer.Interval = 1000
+                    WorkHorse.RunWorkerAsync()
+                    RunStarted = True
                 End Using
+            End Using
+        Finally
+            If WatcherWasEnabled AndAlso Not RunStarted AndAlso WatchDogButton.Text = "Running: True" Then
+                WatchDog.Start()
             End If
-        End Using
+        End Try
     End Sub
 
     Private Sub WatchDogButton_Click(sender As Object, e As EventArgs) Handles WatchDogButton.Click
@@ -761,15 +852,34 @@ Public Class Form1
             Return
         End If
 
-        If Not Directory.Exists(InputTextBox.Text) OrElse Not Directory.Exists(OutputTextBox.Text) Then
-            MsgBox("No path specified, or path invalid!", MsgBoxStyle.Critical, "Error")
+        If WatchDog.Enabled Then
+            WatchDog.Enabled = False
+            WatchDogButton.Text = "Running: False"
+            QueueActivityLabel.Text = "Watcher stopped"
+            SwitchGroups(True)
             Return
         End If
 
-        WatchDog.Enabled = Not WatchDog.Enabled
-        WatchDogButton.Text = "Running: " & WatchDog.Enabled
-        QueueActivityLabel.Text = If(WatchDog.Enabled, "Watching for new textures…", "Watcher stopped")
-        SwitchGroups(Not WatchDog.Enabled)
+        Dim ProfilesToWatch As List(Of FormSettings.GamePathProfile) = GetEffectiveGamePathProfiles()
+        If ProfilesToWatch.Count = 0 Then
+            MsgBox("No folders are selected. Check at least one game profile, or clear the profile table and set the fallback input/output folders.", MsgBoxStyle.Critical, "No paths selected")
+            Return
+        End If
+        For Each Profile As FormSettings.GamePathProfile In ProfilesToWatch
+            If Not Directory.Exists(Profile.InputPath) OrElse Not Directory.Exists(Profile.OutputPath) Then
+                Dim FolderHint As String = If(GamePathProfiles.Count > 0,
+                    "Check the folders in Paths > Manage game paths.",
+                    "Check the fallback input/output folders on the Paths tab.")
+                MsgBox("The input or output folder is invalid for game profile '" & Profile.Name & "'." & Environment.NewLine & FolderHint,
+                       MsgBoxStyle.Critical, "Invalid game path")
+                Return
+            End If
+        Next
+
+        WatchDog.Enabled = True
+        WatchDogButton.Text = "Running: True"
+        QueueActivityLabel.Text = "Watching " & ProfilesToWatch.Count.ToString() & " game path(s)…"
+        SwitchGroups(False)
     End Sub
 
     Private Sub ThreadComboBox_SelectedIndexChanged(sender As Object, e As EventArgs) Handles ThreadComboBox.SelectedIndexChanged
@@ -997,16 +1107,42 @@ Public Class Form1
 #Region "Background"
 
     Private Sub WatchDog_Tick(sender As Object, e As EventArgs) Handles WatchDog.Tick
-        Dim Source = Directory.GetFiles(InputTextBox.Text, "*.*", SearchOption.AllDirectories).Count
-        Dim FileCheck = GetMissingFiles(InputTextBox.Text, OutputTextBox.Text).Count
-        If Source = 0 OrElse FileCheck = 0 Then
-            QueueActivityLabel.Text = "Watching for new textures…"
+        Dim ProfilesToWatch As List(Of FormSettings.GamePathProfile) = GetEffectiveGamePathProfiles()
+        Dim PendingProfiles As New List(Of FormSettings.GamePathProfile)
+        Dim MissingProfileCount As Integer = 0
+
+        For Each Profile As FormSettings.GamePathProfile In ProfilesToWatch
+            Try
+                If Not Directory.Exists(Profile.InputPath) OrElse Not Directory.Exists(Profile.OutputPath) Then
+                    MissingProfileCount += 1
+                    Continue For
+                End If
+                Dim InputFiles As String() = Directory.GetFiles(Profile.InputPath, "*.*", SearchOption.AllDirectories)
+                If InputFiles.Length > 0 AndAlso GetMissingFiles(InputFiles, Profile.OutputPath).Length > 0 Then
+                    PendingProfiles.Add(CloneGamePathProfile(Profile))
+                End If
+            Catch ex As IOException
+                MissingProfileCount += 1
+            Catch ex As UnauthorizedAccessException
+                MissingProfileCount += 1
+            End Try
+        Next
+
+        If PendingProfiles.Count = 0 Then
+            If MissingProfileCount > 0 Then
+                QueueActivityLabel.Text = "Watching · " & MissingProfileCount.ToString() & " game path(s) unavailable"
+            ElseIf ProfilesToWatch.Count = 0 Then
+                QueueActivityLabel.Text = "No checked game paths to watch"
+            Else
+                QueueActivityLabel.Text = "Watching " & ProfilesToWatch.Count.ToString() & " game path(s)…"
+            End If
             WaitScale = Math.Min(WaitScale + 1, 100)
             WatchDog.Interval = 1000 + (WaitScale * 590)
         Else
-            QueueActivityLabel.Text = "Starting next batch…"
+            QueueActivityLabel.Text = "Starting next batch for " & PendingProfiles.Count.ToString() & " game(s)…"
             WaitScale = 0
             WatchDog.Interval = 1000
+            CurrentRunGamePaths = PendingProfiles
             LoadedSettings = New FormSettings.Settings(Me)
             If ChainControl.ListItems.Count = 0 Then
                 AddModelToChain(ExeComboBox.SelectedItem, False)
@@ -1052,16 +1188,14 @@ Public Class Form1
     Private Function GetOverallProgress(ByRef DoneCount As Integer, ByRef TotalCount As Integer) As Integer
         DoneCount = 0
         TotalCount = 0
-        Dim InputPath As String = InputTextBox.Text
-        Dim OutputPath As String = OutputTextBox.Text
-        If Not Directory.Exists(InputPath) OrElse Not Directory.Exists(OutputPath) Then Return 0
+        For Each Profile As FormSettings.GamePathProfile In GetEffectiveGamePathProfiles()
+            If Not Directory.Exists(Profile.InputPath) OrElse Not Directory.Exists(Profile.OutputPath) Then Continue For
+            Dim InputFiles As String() = Directory.GetFiles(Profile.InputPath, "*.*", SearchOption.AllDirectories)
+            TotalCount += InputFiles.Length
+            DoneCount += InputFiles.Length - GetMissingFiles(InputFiles, Profile.OutputPath).Length
+        Next
 
-        Dim InputFiles As String() = Directory.GetFiles(InputPath, "*.*", SearchOption.AllDirectories)
-        TotalCount = InputFiles.Length
-        If TotalCount = 0 Then Return 0
-
-        DoneCount = TotalCount - GetMissingFiles(InputFiles, OutputPath).Length
-        If DoneCount <= 0 Then Return 0
+        If TotalCount = 0 OrElse DoneCount <= 0 Then Return 0
         If DoneCount >= TotalCount Then Return 100
         Return CInt(Math.Floor((DoneCount * 100.0) / TotalCount))
     End Function
@@ -1090,6 +1224,7 @@ Public Class Form1
     End Sub
 
     Private Sub WorkHorse_RunWorkerCompleted(sender As Object, e As System.ComponentModel.RunWorkerCompletedEventArgs) Handles WorkHorse.RunWorkerCompleted
+        CurrentRunGamePaths = Nothing
         If ChainControl.ListItems.Count = 0 Then
             ChainList.Clear()
         End If
@@ -1139,6 +1274,19 @@ Public Class Form1
 #Region "Upscale Routine"
 
     Private Sub MakeUpscale()
+        Dim ProfilesToProcess As List(Of FormSettings.GamePathProfile) = CurrentRunGamePaths
+        If ProfilesToProcess Is Nothing OrElse ProfilesToProcess.Count = 0 Then Return
+
+        Dim BackendPath As String = LoadedSettings.Paths.ExePath
+        For Each Profile As FormSettings.GamePathProfile In ProfilesToProcess
+            If WorkHorse.CancellationPending Then Return
+            LoadedSettings.Paths = New FormSettings.ProgramPaths(Profile.InputPath, Profile.OutputPath, BackendPath)
+            WorkHorse.ReportProgress(0, "Game " & Profile.Name & " · processing input/output folders")
+            MakeUpscaleForCurrentPaths(Profile.Name)
+        Next
+    End Sub
+
+    Private Sub MakeUpscaleForCurrentPaths(ProfileName As String)
         Dim TempPath As String = GetChainPath("Temp", 0)
         Dim ThreadCount As Integer = GetThreads(LoadedSettings.BasicSettings.ThreadIndex, LoadedSettings.BasicSettings.ThreadCount)
         If ThreadCount < 1 Then ThreadCount = 1
@@ -1178,7 +1326,7 @@ Public Class Form1
                 BatchDescription = Path.GetFileName(BatchFiles(0))
                 If BatchFiles.Length > 1 Then BatchDescription &= " (+" & (BatchFiles.Length - 1).ToString() & " more)"
             End If
-            WorkHorse.ReportProgress(0, "Prepared " & BatchFiles.Length.ToString() & " texture(s): " & BatchDescription)
+            WorkHorse.ReportProgress(0, "Prepared " & BatchFiles.Length.ToString() & " texture(s) for " & ProfileName & ": " & BatchDescription)
             Dim StageIndex As Integer = 0
             For Each Model In ChainList
                 StageIndex += 1
@@ -1186,7 +1334,7 @@ Public Class Form1
                     CleanupUpscaleTemporaryFolders()
                     Return
                 End If
-                WorkHorse.ReportProgress(0, "Step " & StageIndex.ToString() & "/" & ChainList.Count.ToString() & " · " & Model.Name & " · " & BatchDescription)
+                WorkHorse.ReportProgress(0, "Step " & StageIndex.ToString() & "/" & ChainList.Count.ToString() & " · " & ProfileName & " · " & Model.Name & " · " & BatchDescription)
                 Dim NewImages As New List(Of String)
                 Dim DiffImages = GetMissingFiles(ChainPaths(0), LoadedSettings.Paths.OutputPath)
                 For Each NewImage As String In DiffImages
@@ -1974,4 +2122,335 @@ Public Class Form1
 
 #End Region
 
+End Class
+
+Friend NotInheritable Class GamePathProfilesDialog
+    Inherits Form
+
+    Private ReadOnly _profiles As BindingList(Of FormSettings.GamePathProfile)
+    Private ReadOnly _grid As DataGridView
+    Private ReadOnly _defaultInputPath As String
+    Private ReadOnly _defaultOutputPath As String
+
+    Public Sub New(Profiles As BindingList(Of FormSettings.GamePathProfile), DefaultInputPath As String, DefaultOutputPath As String)
+        _profiles = Profiles
+        _defaultInputPath = DefaultInputPath
+        _defaultOutputPath = DefaultOutputPath
+
+        Text = "Game input/output paths"
+        StartPosition = FormStartPosition.CenterParent
+        FormBorderStyle = FormBorderStyle.Sizable
+        MinimizeBox = False
+        MaximizeBox = False
+        MinimumSize = New Size(820, 430)
+        ClientSize = New Size(1000, 560)
+
+        _grid = New DataGridView With {
+            .Name = "GamePathProfilesGrid",
+            .Dock = DockStyle.Fill,
+            .AllowUserToAddRows = False,
+            .AllowUserToDeleteRows = False,
+            .AllowUserToResizeRows = False,
+            .AutoGenerateColumns = False,
+            .AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+            .BackgroundColor = SystemColors.Window,
+            .BorderStyle = BorderStyle.Fixed3D,
+            .ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize,
+            .MultiSelect = False,
+            .ReadOnly = False,
+            .RowHeadersVisible = False,
+            .SelectionMode = DataGridViewSelectionMode.FullRowSelect
+        }
+
+        Dim WatchColumn As New DataGridViewCheckBoxColumn With {
+            .Name = "WatchColumn",
+            .HeaderText = "Watch",
+            .DataPropertyName = "Enabled",
+            .FillWeight = 8,
+            .MinimumWidth = 65,
+            .ReadOnly = False,
+            .SortMode = DataGridViewColumnSortMode.NotSortable
+        }
+        Dim NameColumn As New DataGridViewTextBoxColumn With {
+            .Name = "ProfileNameColumn",
+            .HeaderText = "Game / profile",
+            .DataPropertyName = "Name",
+            .FillWeight = 17,
+            .MinimumWidth = 120,
+            .ReadOnly = True,
+            .SortMode = DataGridViewColumnSortMode.NotSortable
+        }
+        Dim InputColumn As New DataGridViewTextBoxColumn With {
+            .Name = "InputPathColumn",
+            .HeaderText = "Input folder",
+            .DataPropertyName = "InputPath",
+            .FillWeight = 37.5,
+            .MinimumWidth = 180,
+            .ReadOnly = True,
+            .SortMode = DataGridViewColumnSortMode.NotSortable
+        }
+        Dim OutputColumn As New DataGridViewTextBoxColumn With {
+            .Name = "OutputPathColumn",
+            .HeaderText = "Output folder",
+            .DataPropertyName = "OutputPath",
+            .FillWeight = 37.5,
+            .MinimumWidth = 180,
+            .ReadOnly = True,
+            .SortMode = DataGridViewColumnSortMode.NotSortable
+        }
+        _grid.Columns.AddRange(New DataGridViewColumn() {WatchColumn, NameColumn, InputColumn, OutputColumn})
+        _grid.DataSource = _profiles
+        AddHandler _grid.CurrentCellDirtyStateChanged, AddressOf Grid_CurrentCellDirtyStateChanged
+        AddHandler _grid.CellDoubleClick, AddressOf Grid_CellDoubleClick
+        AddHandler Me.FormClosing, AddressOf Dialog_FormClosing
+
+        Dim Description As New Label With {
+            .AutoEllipsis = True,
+            .Dock = DockStyle.Fill,
+            .Text = "Check each game folder AutoCrispy should watch. A checked row uses its own input and output folders.",
+            .TextAlign = ContentAlignment.MiddleLeft
+        }
+
+        Dim Footer As New FlowLayoutPanel With {
+            .Dock = DockStyle.Fill,
+            .FlowDirection = FlowDirection.RightToLeft,
+            .Padding = New Padding(0, 7, 0, 0),
+            .WrapContents = False
+        }
+        Dim AddButton As Button = CreateButton("Add...", 82)
+        Dim EditButton As Button = CreateButton("Edit...", 82)
+        Dim RemoveButton As Button = CreateButton("Remove", 82)
+        Dim CheckAllButton As Button = CreateButton("Check all", 88)
+        Dim UncheckAllButton As Button = CreateButton("Uncheck all", 100)
+        Dim CloseButton As Button = CreateButton("Close", 82)
+        CloseButton.DialogResult = DialogResult.OK
+        Footer.Controls.AddRange(New Control() {CloseButton, UncheckAllButton, CheckAllButton, RemoveButton, EditButton, AddButton})
+
+        AddHandler AddButton.Click, AddressOf AddButton_Click
+        AddHandler EditButton.Click, AddressOf EditButton_Click
+        AddHandler RemoveButton.Click, AddressOf RemoveButton_Click
+        AddHandler CheckAllButton.Click, AddressOf CheckAllButton_Click
+        AddHandler UncheckAllButton.Click, AddressOf UncheckAllButton_Click
+
+        Dim Layout As New TableLayoutPanel With {
+            .Dock = DockStyle.Fill,
+            .ColumnCount = 1,
+            .RowCount = 3,
+            .Padding = New Padding(10)
+        }
+        Layout.ColumnStyles.Add(New ColumnStyle(SizeType.Percent, 100.0!))
+        Layout.RowStyles.Add(New RowStyle(SizeType.Absolute, 36.0!))
+        Layout.RowStyles.Add(New RowStyle(SizeType.Percent, 100.0!))
+        Layout.RowStyles.Add(New RowStyle(SizeType.Absolute, 48.0!))
+        Layout.Controls.Add(Description, 0, 0)
+        Layout.Controls.Add(_grid, 0, 1)
+        Layout.Controls.Add(Footer, 0, 2)
+        Controls.Add(Layout)
+    End Sub
+
+    Private Shared Function CreateButton(Caption As String, Width As Integer) As Button
+        Return New Button With {
+            .Text = Caption,
+            .Width = Width,
+            .Height = 32,
+            .UseVisualStyleBackColor = True
+        }
+    End Function
+
+    Private Sub Grid_CurrentCellDirtyStateChanged(sender As Object, e As EventArgs)
+        If _grid.IsCurrentCellDirty AndAlso TypeOf _grid.CurrentCell Is DataGridViewCheckBoxCell Then
+            _grid.CommitEdit(DataGridViewDataErrorContexts.Commit)
+        End If
+    End Sub
+
+    Private Sub Grid_CellDoubleClick(sender As Object, e As DataGridViewCellEventArgs)
+        If e.RowIndex >= 0 Then EditSelectedProfile()
+    End Sub
+
+    Private Sub Dialog_FormClosing(sender As Object, e As FormClosingEventArgs)
+        If _grid.IsCurrentCellDirty Then _grid.CommitEdit(DataGridViewDataErrorContexts.Commit)
+        _grid.EndEdit()
+    End Sub
+
+    Private Function GetSelectedProfile() As FormSettings.GamePathProfile
+        If _grid.CurrentRow Is Nothing Then Return Nothing
+        Return TryCast(_grid.CurrentRow.DataBoundItem, FormSettings.GamePathProfile)
+    End Function
+
+    Private Sub AddButton_Click(sender As Object, e As EventArgs)
+        Dim InputDefault As String = If(_profiles.Count = 0, _defaultInputPath, "")
+        Dim OutputDefault As String = If(_profiles.Count = 0, _defaultOutputPath, "")
+        Using Editor As New GamePathProfileEditorDialog(Nothing, InputDefault, OutputDefault)
+            If Editor.ShowDialog(Me) = DialogResult.OK Then
+                _profiles.Add(Editor.Profile)
+                _grid.ClearSelection()
+                Dim NewRowIndex As Integer = _grid.Rows.Count - 1
+                If NewRowIndex >= 0 Then
+                    _grid.CurrentCell = _grid.Rows(NewRowIndex).Cells(0)
+                    _grid.Rows(NewRowIndex).Selected = True
+                End If
+            End If
+        End Using
+    End Sub
+
+    Private Sub EditButton_Click(sender As Object, e As EventArgs)
+        EditSelectedProfile()
+    End Sub
+
+    Private Sub EditSelectedProfile()
+        Dim SelectedProfile As FormSettings.GamePathProfile = GetSelectedProfile()
+        If SelectedProfile Is Nothing Then
+            MessageBox.Show(Me, "Select a game path profile to edit.", "No profile selected", MessageBoxButtons.OK, MessageBoxIcon.Information)
+            Return
+        End If
+        Using Editor As New GamePathProfileEditorDialog(SelectedProfile, SelectedProfile.InputPath, SelectedProfile.OutputPath)
+            If Editor.ShowDialog(Me) = DialogResult.OK Then
+                SelectedProfile.Name = Editor.Profile.Name
+                SelectedProfile.InputPath = Editor.Profile.InputPath
+                SelectedProfile.OutputPath = Editor.Profile.OutputPath
+                _grid.Refresh()
+            End If
+        End Using
+    End Sub
+
+    Private Sub RemoveButton_Click(sender As Object, e As EventArgs)
+        Dim SelectedProfile As FormSettings.GamePathProfile = GetSelectedProfile()
+        If SelectedProfile Is Nothing Then
+            MessageBox.Show(Me, "Select a game path profile to remove.", "No profile selected", MessageBoxButtons.OK, MessageBoxIcon.Information)
+            Return
+        End If
+        If MessageBox.Show(Me, "Remove the '" & SelectedProfile.Name & "' game path profile?", "Remove profile", MessageBoxButtons.YesNo, MessageBoxIcon.Question) = DialogResult.Yes Then
+            _profiles.Remove(SelectedProfile)
+        End If
+    End Sub
+
+    Private Sub CheckAllButton_Click(sender As Object, e As EventArgs)
+        For Each Profile As FormSettings.GamePathProfile In _profiles
+            Profile.Enabled = True
+        Next
+        _grid.Refresh()
+    End Sub
+
+    Private Sub UncheckAllButton_Click(sender As Object, e As EventArgs)
+        For Each Profile As FormSettings.GamePathProfile In _profiles
+            Profile.Enabled = False
+        Next
+        _grid.Refresh()
+    End Sub
+End Class
+
+Friend NotInheritable Class GamePathProfileEditorDialog
+    Inherits Form
+
+    Private ReadOnly _nameBox As TextBox
+    Private ReadOnly _inputPathBox As TextBox
+    Private ReadOnly _outputPathBox As TextBox
+    Public Property Profile As FormSettings.GamePathProfile
+
+    Public Sub New(ExistingProfile As FormSettings.GamePathProfile, DefaultInputPath As String, DefaultOutputPath As String)
+        Text = If(ExistingProfile Is Nothing, "Add game path profile", "Edit game path profile")
+        StartPosition = FormStartPosition.CenterParent
+        FormBorderStyle = FormBorderStyle.FixedDialog
+        ShowInTaskbar = False
+        MinimizeBox = False
+        MaximizeBox = False
+        ClientSize = New Size(760, 190)
+
+        _nameBox = New TextBox With {.Dock = DockStyle.Fill, .Text = If(ExistingProfile Is Nothing, "", ExistingProfile.Name)}
+        _inputPathBox = New TextBox With {.Dock = DockStyle.Fill, .Text = If(ExistingProfile Is Nothing, DefaultInputPath, ExistingProfile.InputPath)}
+        _outputPathBox = New TextBox With {.Dock = DockStyle.Fill, .Text = If(ExistingProfile Is Nothing, DefaultOutputPath, ExistingProfile.OutputPath)}
+
+        Dim Layout As New TableLayoutPanel With {
+            .Dock = DockStyle.Fill,
+            .ColumnCount = 3,
+            .RowCount = 4,
+            .Padding = New Padding(12)
+        }
+        Layout.ColumnStyles.Add(New ColumnStyle(SizeType.Absolute, 112.0!))
+        Layout.ColumnStyles.Add(New ColumnStyle(SizeType.Percent, 100.0!))
+        Layout.ColumnStyles.Add(New ColumnStyle(SizeType.Absolute, 92.0!))
+        Layout.RowStyles.Add(New RowStyle(SizeType.Absolute, 34.0!))
+        Layout.RowStyles.Add(New RowStyle(SizeType.Absolute, 38.0!))
+        Layout.RowStyles.Add(New RowStyle(SizeType.Absolute, 38.0!))
+        Layout.RowStyles.Add(New RowStyle(SizeType.Percent, 100.0!))
+
+        Layout.Controls.Add(CreateFieldLabel("Profile name:"), 0, 0)
+        Layout.Controls.Add(_nameBox, 1, 0)
+        Layout.SetColumnSpan(_nameBox, 2)
+        Layout.Controls.Add(CreateFieldLabel("Input folder:"), 0, 1)
+        Layout.Controls.Add(_inputPathBox, 1, 1)
+        Layout.Controls.Add(CreateBrowseButton("Browse input folder", _inputPathBox), 2, 1)
+        Layout.Controls.Add(CreateFieldLabel("Output folder:"), 0, 2)
+        Layout.Controls.Add(_outputPathBox, 1, 2)
+        Layout.Controls.Add(CreateBrowseButton("Browse output folder", _outputPathBox), 2, 2)
+
+        Dim ButtonPanel As New FlowLayoutPanel With {
+            .Dock = DockStyle.Fill,
+            .FlowDirection = FlowDirection.LeftToRight,
+            .WrapContents = False
+        }
+        Dim OkButton As New Button With {.Text = "OK", .Width = 86, .Height = 30, .DialogResult = DialogResult.None, .UseVisualStyleBackColor = True}
+        Dim CancelButton As New Button With {.Text = "Cancel", .Width = 86, .Height = 30, .DialogResult = DialogResult.Cancel, .UseVisualStyleBackColor = True}
+        ButtonPanel.Controls.Add(OkButton)
+        ButtonPanel.Controls.Add(CancelButton)
+        Layout.Controls.Add(ButtonPanel, 0, 3)
+        Layout.SetColumnSpan(ButtonPanel, 3)
+        Controls.Add(Layout)
+
+        AddHandler OkButton.Click, AddressOf OkButton_Click
+        AcceptButton = OkButton
+        Me.CancelButton = CancelButton
+    End Sub
+
+    Private Shared Function CreateFieldLabel(Caption As String) As Label
+        Return New Label With {
+            .AutoSize = True,
+            .Dock = DockStyle.Fill,
+            .Text = Caption,
+            .TextAlign = ContentAlignment.MiddleLeft
+        }
+    End Function
+
+    Private Shared Function CreateBrowseButton(Description As String, Target As TextBox) As Button
+        Dim BrowseButton As New Button With {
+            .Dock = DockStyle.Fill,
+            .Text = "Browse...",
+            .UseVisualStyleBackColor = True
+        }
+        AddHandler BrowseButton.Click,
+            Sub(sender As Object, e As EventArgs)
+                Using FolderPicker As New FolderBrowserDialog
+                    FolderPicker.Description = Description
+                    If Directory.Exists(Target.Text) Then FolderPicker.SelectedPath = Target.Text
+                    If FolderPicker.ShowDialog() = DialogResult.OK Then Target.Text = FolderPicker.SelectedPath
+                End Using
+            End Sub
+        Return BrowseButton
+    End Function
+
+    Private Sub OkButton_Click(sender As Object, e As EventArgs)
+        Dim InputPath As String = _inputPathBox.Text.Trim()
+        Dim OutputPath As String = _outputPathBox.Text.Trim()
+        If Not Directory.Exists(InputPath) Then
+            MessageBox.Show(Me, "Choose an existing input folder.", "Invalid input folder", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+            _inputPathBox.Focus()
+            Return
+        End If
+        If Not Directory.Exists(OutputPath) Then
+            MessageBox.Show(Me, "Choose an existing output folder.", "Invalid output folder", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+            _outputPathBox.Focus()
+            Return
+        End If
+
+        Dim ProfileName As String = _nameBox.Text.Trim()
+        If String.IsNullOrWhiteSpace(ProfileName) Then
+            Dim TrimmedPath As String = InputPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            ProfileName = Path.GetFileName(TrimmedPath)
+        End If
+        If String.IsNullOrWhiteSpace(ProfileName) Then ProfileName = "Game"
+
+        Profile = New FormSettings.GamePathProfile(ProfileName, InputPath, OutputPath, True)
+        Me.DialogResult = System.Windows.Forms.DialogResult.OK
+        Close()
+    End Sub
 End Class

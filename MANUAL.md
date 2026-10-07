@@ -7,6 +7,10 @@ AutoCrispy will try to detect any Executables it supports on startup.  They can 
 
 AutoCrispy also searches in these subfolders for Python scripts and ESRGAN models. For ESRGAN models, it searches two directory levels down. Put Spandrel checkpoints in one shared `models` folder under the program or configured backend root. PLKSR V3 and DAT2 V4 appear in the single Spandrel model selector when recognized; there are no separate PLKSR/DAT2 backend choices. The selector lists Spandrel-recognized 1× RGB restoration or 4× RGB super-resolution models. Older `Spandrel` folders remain supported. This selector is separate from the legacy ESRGAN backend. See [PLKSR_SETUP.md](PLKSR_SETUP.md) for folder and Python/PyTorch setup. When both `best_realesrnet.pth` (Architect) and `best_swinir.pth` (Painter) are recognized as 4× RGB checkpoints, the selector also offers an experimental image-feature router. It assigns a configurable share of detailed/repeating textures to Painter and sends the rest to Architect; it is a heuristic, not a semantic classifier. Details and limitations are in [PLKSR_SETUP.md](PLKSR_SETUP.md).
 
+## Multiple PCSX2 game folders
+
+Open the **Paths** tab and choose **Manage game paths...** to save input/output folder pairs for your games. Add one profile per game (for example, `SLUS-20111`), choose its input and replacement output folders, and check the rows AutoCrispy should watch. The watcher scans the checked profiles and processes pending games sequentially; the progress display aggregates their completion. Profiles are saved with AutoCrispy settings. Existing single input/output settings are migrated into a checked profile automatically, and **Run Once** remains a separate one-image operation.
+
 ## Special Notes about Python
 
 AutoCrispy does its best to detect Python installations.  First, it checks for the portable Python build.  Next, it will attempt to read PATH to see if Python is installed somewhere on the system, and if so, gets its path.

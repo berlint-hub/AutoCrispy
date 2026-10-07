@@ -113,6 +113,8 @@ Partial Class Form1
         Me.ExeTextBox = New System.Windows.Forms.TextBox()
         Me.OutputTextBox = New System.Windows.Forms.TextBox()
         Me.InputBrowse = New System.Windows.Forms.Button()
+        Me.ManageGamePathsButton = New System.Windows.Forms.Button()
+        Me.GamePathsSummaryLabel = New System.Windows.Forms.Label()
         Me.Label1 = New System.Windows.Forms.Label()
         Me.Label23 = New System.Windows.Forms.Label()
         Me.Label2 = New System.Windows.Forms.Label()
@@ -1094,6 +1096,8 @@ Partial Class Form1
         Me.PathGroup.Controls.Add(Me.Label1)
         Me.PathGroup.Controls.Add(Me.Label23)
         Me.PathGroup.Controls.Add(Me.Label2)
+        Me.PathGroup.Controls.Add(Me.ManageGamePathsButton)
+        Me.PathGroup.Controls.Add(Me.GamePathsSummaryLabel)
         Me.PathGroup.Location = New System.Drawing.Point(4, 29)
         Me.PathGroup.Margin = New System.Windows.Forms.Padding(4, 5, 4, 5)
         Me.PathGroup.Name = "PathGroup"
@@ -1157,6 +1161,26 @@ Partial Class Form1
         Me.InputBrowse.Text = "..."
         Me.InputBrowse.UseVisualStyleBackColor = True
         '
+        'ManageGamePathsButton
+        '
+        Me.ManageGamePathsButton.Location = New System.Drawing.Point(9, 135)
+        Me.ManageGamePathsButton.Margin = New System.Windows.Forms.Padding(4, 5, 4, 5)
+        Me.ManageGamePathsButton.Name = "ManageGamePathsButton"
+        Me.ManageGamePathsButton.Size = New System.Drawing.Size(205, 32)
+        Me.ManageGamePathsButton.TabIndex = 6
+        Me.ManageGamePathsButton.Text = "Manage game paths..."
+        Me.ManageGamePathsButton.UseVisualStyleBackColor = True
+        '
+        'GamePathsSummaryLabel
+        '
+        Me.GamePathsSummaryLabel.AutoEllipsis = True
+        Me.GamePathsSummaryLabel.Location = New System.Drawing.Point(226, 141)
+        Me.GamePathsSummaryLabel.Margin = New System.Windows.Forms.Padding(4, 0, 4, 0)
+        Me.GamePathsSummaryLabel.Name = "GamePathsSummaryLabel"
+        Me.GamePathsSummaryLabel.Size = New System.Drawing.Size(689, 20)
+        Me.GamePathsSummaryLabel.TabIndex = 7
+        Me.GamePathsSummaryLabel.Text = "No saved game profiles; using the Input/Output folders above."
+        '
         'Label1
         '
         Me.Label1.AutoSize = True
@@ -1165,7 +1189,7 @@ Partial Class Form1
         Me.Label1.Name = "Label1"
         Me.Label1.Size = New System.Drawing.Size(99, 20)
         Me.Label1.TabIndex = 0
-        Me.Label1.Text = "Input Folder:"
+        Me.Label1.Text = "Fallback Input:"
         '
         'Label23
         '
@@ -1185,7 +1209,7 @@ Partial Class Form1
         Me.Label2.Name = "Label2"
         Me.Label2.Size = New System.Drawing.Size(111, 20)
         Me.Label2.TabIndex = 0
-        Me.Label2.Text = "Output Folder:"
+        Me.Label2.Text = "Fallback Output:"
         '
         'TabGroup
         '
@@ -1673,6 +1697,8 @@ Partial Class Form1
     Friend WithEvents InputTextBox As TextBox
     Friend WithEvents OutputTextBox As TextBox
     Friend WithEvents InputBrowse As Button
+    Friend WithEvents ManageGamePathsButton As Button
+    Friend WithEvents GamePathsSummaryLabel As Label
     Friend WithEvents Label1 As Label
     Friend WithEvents Label2 As Label
     Friend WithEvents TabGroup As TabControl
