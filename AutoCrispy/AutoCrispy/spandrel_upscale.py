@@ -581,14 +581,70 @@ def _texture_features(input_path: Path) -> dict[str, float]:
     }
 
 
-def _iter_supported_images(input_folder: Path) -> list[Path]:
-    """Return all supported images recursively in deterministic relative-path order."""
+def _path_is_within(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def _validate_input_output_paths(input_folder: Path, output_folder: Path) -> None:
+    if input_folder.resolve() == output_folder.resolve():
+        raise ValueError(
+            "Input and output folders must be different to avoid overwriting source images."
+        )
+
+
+def _iter_supported_images(
+    input_folder: Path, excluded_folder: Path | None = None
+) -> list[Path]:
+    """Find supported images in path order, pruning an output subtree if supplied."""
+    input_root = input_folder.resolve()
+    excluded_root = excluded_folder.resolve() if excluded_folder is not None else None
+    if excluded_root == input_root:
+        raise ValueError(
+            "Input and output folders must be different to avoid overwriting source images."
+        )
+    exclude_output_subtree = (
+        excluded_root is not None
+        and _path_is_within(excluded_root, input_root)
+    )
+
+    images: list[Path] = []
+    pending_folders = [input_folder]
+    while pending_folders:
+        folder = pending_folders.pop()
+        try:
+            entries = sorted(
+                folder.iterdir(), key=lambda path: (path.name.casefold(), path.name)
+            )
+        except OSError:
+            continue
+        for path in entries:
+            try:
+                if path.is_dir():
+                    if path.is_symlink() or (
+                        excluded_root is not None and path.resolve() == excluded_root
+                    ):
+                        continue
+                    pending_folders.append(path)
+                    continue
+                if not path.is_file() or path.suffix.casefold() not in SUPPORTED_EXTENSIONS:
+                    continue
+                if (
+                    exclude_output_subtree
+                    and excluded_root is not None
+                    and _path_is_within(path.resolve(), excluded_root)
+                ):
+                    continue
+                images.append(path)
+            except OSError:
+                # Files can disappear while the game is writing a dump.
+                continue
+
     return sorted(
-        (
-            path
-            for path in input_folder.rglob("*")
-            if path.is_file() and path.suffix.casefold() in SUPPORTED_EXTENSIONS
-        ),
+        images,
         key=lambda path: (
             path.relative_to(input_folder).as_posix().casefold(),
             path.relative_to(input_folder).as_posix(),
@@ -694,7 +750,12 @@ def _preview_auto_route(args: argparse.Namespace) -> int:
 def _run_auto_route(args: argparse.Namespace) -> int:
     if not args.input.is_dir():
         raise NotADirectoryError(f"Input folder not found: {args.input}")
+    _validate_input_output_paths(args.input, args.output)
     args.output.mkdir(parents=True, exist_ok=True)
+    files = _iter_supported_images(args.input, args.output)
+    if not files:
+        print("Auto routing found no supported images.")
+        return 0
     if args.architect_model.resolve() == args.painter_model.resolve():
         raise ValueError("Architect and Painter must be different checkpoints.")
 
@@ -718,11 +779,6 @@ def _run_auto_route(args: argparse.Namespace) -> int:
         raise ValueError("Automatic Architect/Painter routing requires two 4x RGB models.")
     if architect.scale != painter.scale:
         raise ValueError("Architect and Painter checkpoints must use the same scale.")
-
-    files = _iter_supported_images(args.input)
-    if not files:
-        print("Auto routing found no supported images.")
-        return 0
 
     scored_files: list[tuple[Path, dict[str, float]]] = []
     report_interval = max(1, len(files) // 100)
@@ -885,7 +941,12 @@ def run(args: argparse.Namespace) -> int:
         raise ValueError("A checkpoint, input folder, and output folder are required.")
     if not args.input.is_dir():
         raise NotADirectoryError(f"Input folder not found: {args.input}")
+    _validate_input_output_paths(args.input, args.output)
     args.output.mkdir(parents=True, exist_ok=True)
+    files = _iter_supported_images(args.input, args.output)
+    if not files:
+        print("No supported images found.")
+        return 0
 
     model, device, dtype, device_name = _load_model(
         args.model,
@@ -901,15 +962,28 @@ def run(args: argparse.Namespace) -> int:
         f"{device_name} ({dtype})."
     )
 
-    files = _iter_supported_images(args.input)
-    for input_path in files:
-        _process_image(
-            input_path,
-            args.output / input_path.relative_to(args.input),
-            model,
-            device,
-            dtype,
-            args.tile_size,
+    for index, input_path in enumerate(files, start=1):
+        relative_path = input_path.relative_to(args.input)
+        print(
+            f"AUTOCRISPY_PROGRESS: {index}/{len(files)} · Upscaling · {input_path.name}",
+            flush=True,
+        )
+        try:
+            _process_image(
+                input_path,
+                args.output / relative_path,
+                model,
+                device,
+                dtype,
+                args.tile_size,
+            )
+        except Exception as error:
+            raise RuntimeError(
+                f"Failed to upscale {relative_path.as_posix()}: {error}"
+            ) from error
+        print(
+            f"AUTOCRISPY_RESULT: {index}/{len(files)} · Upscaling · {input_path.name} · OK",
+            flush=True,
         )
 
     print(f"Upscaled {len(files)} image(s).")

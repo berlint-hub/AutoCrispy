@@ -333,9 +333,12 @@ class SpandrelRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             input_folder = root / "input"
-            output_folder = root / "output"
+            output_folder = input_folder / "processed"
             nested_folder = input_folder / "nested"
             nested_folder.mkdir(parents=True)
+            output_folder.mkdir()
+            stale_output = output_folder / "old-result.png"
+            stale_output.touch()
             architect_file = input_folder / "a-architect.png"
             painter_file = input_folder / "z-painter.png"
             nested_file = nested_folder / "n-architect.png"
@@ -391,6 +394,7 @@ class SpandrelRunnerTests(unittest.TestCase):
             self.assertEqual(result, 0)
             self.assertCountEqual(processed_files, [architect_file, painter_file, nested_file])
             self.assertNotIn(unsupported_file, processed_files)
+            self.assertNotIn(stale_output, processed_files)
             self.assertEqual(processed_outputs[nested_file], output_folder / "nested" / nested_file.name)
             self.assertEqual(processed_outputs[architect_file], output_folder / architect_file.name)
             log = output.getvalue()
@@ -408,7 +412,10 @@ class SpandrelRunnerTests(unittest.TestCase):
             nested_folder.mkdir(parents=True)
             nested_file = nested_folder / "stone.png"
             nested_file.touch()
-            output_folder = root / "output"
+            output_folder = input_folder / "processed"
+            output_folder.mkdir()
+            stale_output = output_folder / "old-result.png"
+            stale_output.touch()
             model_file = root / "model.pth"
             args = types.SimpleNamespace(
                 preview_route=False,
@@ -422,6 +429,7 @@ class SpandrelRunnerTests(unittest.TestCase):
             )
             descriptor = FakeImageDescriptor()
             outputs: list[tuple[Path, Path]] = []
+            output = io.StringIO()
             with (
                 patch.object(
                     runner,
@@ -433,12 +441,66 @@ class SpandrelRunnerTests(unittest.TestCase):
                     "_process_image",
                     side_effect=lambda source, destination, *_args: outputs.append((source, destination)),
                 ),
-                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stdout(output),
             ):
                 result = runner.run(args)
 
             self.assertEqual(result, 0)
             self.assertEqual(outputs, [(nested_file, output_folder / "world" / "textures" / "stone.png")])
+            self.assertNotIn(stale_output, [source for source, _ in outputs])
+            self.assertIn("AUTOCRISPY_PROGRESS: 1/1 · Upscaling · stone.png", output.getvalue())
+            self.assertIn("AUTOCRISPY_RESULT: 1/1 · Upscaling · stone.png · OK", output.getvalue())
+
+    def test_image_discovery_keeps_images_when_output_is_a_parent_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output_folder = Path(temporary)
+            input_folder = output_folder / "input"
+            input_folder.mkdir()
+            image = input_folder / "texture.png"
+            image.touch()
+
+            self.assertEqual(runner._iter_supported_images(input_folder, output_folder), [image])
+
+    def test_single_model_runner_rejects_identical_input_and_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            input_folder = Path(temporary) / "input"
+            input_folder.mkdir()
+            args = types.SimpleNamespace(
+                preview_route=False,
+                auto_route=False,
+                model=Path(temporary) / "model.pth",
+                input=input_folder,
+                output=input_folder,
+                cpu=True,
+                generic_model=True,
+                tile_size=0,
+            )
+            with patch.object(runner, "_load_model") as load_model:
+                with self.assertRaisesRegex(ValueError, "must be different"):
+                    runner.run(args)
+            load_model.assert_not_called()
+
+    def test_single_model_runner_skips_model_loading_for_empty_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_folder = root / "input"
+            input_folder.mkdir()
+            args = types.SimpleNamespace(
+                preview_route=False,
+                auto_route=False,
+                model=root / "model.pth",
+                input=input_folder,
+                output=root / "output",
+                cpu=True,
+                generic_model=True,
+                tile_size=0,
+            )
+            output = io.StringIO()
+            with patch.object(runner, "_load_model") as load_model, contextlib.redirect_stdout(output):
+                result = runner.run(args)
+            self.assertEqual(result, 0)
+            self.assertIn("No supported images found.", output.getvalue())
+            load_model.assert_not_called()
 
     def test_single_checkpoint_cli_does_not_enable_auto_route(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
