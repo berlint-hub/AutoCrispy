@@ -111,6 +111,7 @@
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="FormSettings.vb" />
+    <Compile Include="AutoRoutePreviewDialog.vb" />
     <Compile Include="My Project\AssemblyInfo.vb" />
     <Compile Include="My Project\Application.Designer.vb">
       <AutoGen>True</AutoGen>

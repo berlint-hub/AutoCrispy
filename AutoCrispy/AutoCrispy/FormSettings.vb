@@ -55,6 +55,9 @@
         Dim SavedPainterShare As Integer = LoadedSettings.PythonPak.PainterShare
         If SavedPainterShare < 10 OrElse SavedPainterShare > 90 Then SavedPainterShare = 30
         Source.AutoPainterSharePercent.Value = SavedPainterShare
+        Dim SavedPainterThreshold As Decimal = LoadedSettings.PythonPak.PainterThreshold
+        If SavedPainterThreshold < 0.05D OrElse SavedPainterThreshold > 1D Then SavedPainterThreshold = 0.34D
+        Source.AutoPainterThreshold.Value = SavedPainterThreshold
 
         'Load UI Paths
         Source.InputTextBox.Text = LoadedSettings.Paths.InputPath
@@ -409,10 +412,12 @@
         Public Property ArchitectModel As String
         Public Property PainterModel As String
         Public Property PainterShare As Integer
+        Public Property PainterThreshold As Decimal
         Public Property FileTypes As List(Of String)
         Public Sub New(_Model As String, _TileSize As Integer, _CPUOnly As Boolean, Optional _UseSpandrelFormats As Boolean = False,
                        Optional _AutoRouteEnabled As Boolean = False, Optional _ArchitectModel As String = "",
-                       Optional _PainterModel As String = "", Optional _PainterShare As Integer = 30)
+                       Optional _PainterModel As String = "", Optional _PainterShare As Integer = 30,
+                       Optional _PainterThreshold As Decimal = 0.34D)
             Model = _Model
             TileSize = _TileSize
             CPUOnly = _CPUOnly
@@ -420,6 +425,7 @@
             ArchitectModel = _ArchitectModel
             PainterModel = _PainterModel
             PainterShare = _PainterShare
+            PainterThreshold = _PainterThreshold
             If _UseSpandrelFormats Then
                 FileTypes = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp", ".tga"}.ToList
             Else

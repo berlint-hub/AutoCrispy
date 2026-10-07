@@ -66,6 +66,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Route each texture to an Architect or Painter model using image features",
     )
+    parser.add_argument(
+        "--preview-route",
+        action="store_true",
+        help="Analyze input textures and report route assignments without upscaling",
+    )
     parser.add_argument("--architect-model", type=Path, help="4x Architect checkpoint for auto routing")
     parser.add_argument("--painter-model", type=Path, help="4x Painter checkpoint for auto routing")
     parser.add_argument(
@@ -73,6 +78,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=30,
         help="Maximum Painter share for batches of 10+ images (default: 30 percent)",
+    )
+    parser.add_argument(
+        "--painter-threshold",
+        type=float,
+        default=AUTO_ROUTE_MIN_PAINTER_SCORE,
+        help="Minimum feature score for Painter eligibility (default: 0.34)",
     )
     parser.add_argument("--input", type=Path, help="Input folder")
     parser.add_argument("--output", type=Path, help="Output folder")
@@ -94,9 +105,20 @@ def parse_args() -> argparse.Namespace:
         "--debug", action="store_true", help="Print a full traceback on errors"
     )
     args = parser.parse_args()
-    if args.list_models is None:
+    if args.preview_route:
+        if args.list_models is not None:
+            parser.error("Do not combine --preview-route with --list-models")
+        if args.input is None:
+            parser.error("--preview-route requires --input")
+        if args.model is not None or args.auto_route:
+            parser.error("--preview-route does not run a model; omit the model and --auto-route")
+        if not 0 <= args.painter_share <= 100:
+            parser.error("--painter-share must be between 0 and 100")
+        if not 0 <= args.painter_threshold <= 1:
+            parser.error("--painter-threshold must be between 0 and 1")
+    elif args.list_models is None:
         if args.input is None or args.output is None:
-            parser.error("--input and --output are required unless --list-models is used")
+            parser.error("--input and --output are required unless --list-models or --preview-route is used")
         if args.auto_route:
             if args.model is not None:
                 parser.error("Do not pass a single model together with --auto-route")
@@ -104,6 +126,8 @@ def parse_args() -> argparse.Namespace:
                 parser.error("--auto-route requires both --architect-model and --painter-model")
             if not 0 <= args.painter_share <= 100:
                 parser.error("--painter-share must be between 0 and 100")
+            if not 0 <= args.painter_threshold <= 1:
+                parser.error("--painter-threshold must be between 0 and 1")
         elif args.model is None:
             parser.error("A checkpoint is required unless --auto-route or --list-models is used")
     return args
@@ -461,15 +485,19 @@ def _texture_features(input_path: Path) -> dict[str, float]:
 
 
 def _select_painter_files(
-    scored_files: list[tuple[Path, dict[str, float]]], painter_share: int
+    scored_files: list[tuple[Path, dict[str, float]]],
+    painter_share: int,
+    painter_threshold: float = AUTO_ROUTE_MIN_PAINTER_SCORE,
 ) -> set[Path]:
     """Select high-texture images, capped at the requested share for large batches."""
     if not 0 <= painter_share <= 100:
         raise ValueError("Painter share must be between 0 and 100 percent.")
+    if not 0 <= painter_threshold <= 1:
+        raise ValueError("Painter threshold must be between 0 and 1.")
     eligible = [
         (path, features)
         for path, features in scored_files
-        if features["score"] >= AUTO_ROUTE_MIN_PAINTER_SCORE
+        if features["score"] >= painter_threshold
     ]
     if not eligible or painter_share == 0:
         return set()
@@ -489,6 +517,57 @@ def _select_painter_files(
         ),
     )
     return {path for path, _ in ranked[:target_count]}
+
+
+def _preview_auto_route(args: argparse.Namespace) -> int:
+    if not args.input.is_dir():
+        raise NotADirectoryError(f"Input folder not found: {args.input}")
+    files = sorted(
+        path
+        for path in args.input.iterdir()
+        if path.is_file() and path.suffix.casefold() in SUPPORTED_EXTENSIONS
+    )
+    scored_files: list[tuple[Path, dict[str, float]]] = []
+    report_interval = max(1, len(files) // 100)
+    for index, input_path in enumerate(files, start=1):
+        if index == 1 or index % report_interval == 0 or index == len(files):
+            print(
+                f"AUTOCRISPY_PROGRESS: {index}/{len(files)} · Analyzing texture · {input_path.name}",
+                flush=True,
+            )
+        scored_files.append((input_path, _texture_features(input_path)))
+
+    painter_files = _select_painter_files(
+        scored_files, args.painter_share, args.painter_threshold
+    )
+    architect_count = len(files) - len(painter_files)
+    print(
+        f"AUTOCRISPY_ROUTE_PREVIEW_SUMMARY: total={len(files)}; "
+        f"Architect={architect_count}; Painter={len(painter_files)}; "
+        f"PainterCap={args.painter_share}%; Threshold={args.painter_threshold:.3f}.",
+        flush=True,
+    )
+    for input_path, features in scored_files:
+        role = "Painter" if input_path in painter_files else "Architect"
+        if features["score"] < args.painter_threshold:
+            reason = "Below minimum Painter score"
+        elif role == "Painter":
+            reason = "Eligible and selected for Painter"
+        else:
+            reason = "Eligible, but outside the Painter share cap"
+        encoded_path = base64.b64encode(
+            str(input_path.resolve()).encode("utf-8")
+        ).decode("ascii")
+        print(
+            "AUTOCRISPY_ROUTE_PREVIEW_ITEM:"
+            f"{encoded_path}\t{role}\t{features['score']:.6f}\t"
+            f"{features['detail']:.6f}\t{features['edge_density']:.6f}\t"
+            f"{features['orientation_entropy']:.6f}\t"
+            f"{features['local_pattern_entropy']:.6f}\t"
+            f"{features['periodicity']:.6f}\t{reason}",
+            flush=True,
+        )
+    return 0
 
 
 def _run_auto_route(args: argparse.Namespace) -> int:
@@ -527,12 +606,17 @@ def _run_auto_route(args: argparse.Namespace) -> int:
                 flush=True,
             )
         scored_files.append((input_path, _texture_features(input_path)))
-    painter_files = _select_painter_files(scored_files, args.painter_share)
+    painter_threshold = getattr(
+        args, "painter_threshold", AUTO_ROUTE_MIN_PAINTER_SCORE
+    )
+    painter_files = _select_painter_files(
+        scored_files, args.painter_share, painter_threshold
+    )
     architect_count = len(files) - len(painter_files)
     print(
         f"AUTOCRISPY_ROUTE_SUMMARY: total={len(files)}; Architect={architect_count}; "
-        f"Painter={len(painter_files)}; PainterCap={args.painter_share}% "
-        "(feature-based, not semantic).",
+        f"Painter={len(painter_files)}; PainterCap={args.painter_share}%; "
+        f"Threshold={painter_threshold:.3f} (feature-based, not semantic).",
         flush=True,
     )
     print(
@@ -661,6 +745,8 @@ def list_supported_models(model_root: Path, debug: bool = False) -> int:
 
 
 def run(args: argparse.Namespace) -> int:
+    if args.preview_route:
+        return _preview_auto_route(args)
     if args.auto_route:
         return _run_auto_route(args)
     if args.model is None or args.input is None or args.output is None:

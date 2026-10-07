@@ -3,6 +3,7 @@ Imports System.Reflection
 Imports System.ComponentModel
 Imports System.Threading
 Imports System.Threading.Tasks
+Imports System.Globalization
 
 Public Class Form1
 
@@ -18,6 +19,7 @@ Public Class Form1
     Private LastSelectedArchitectModelPath As String = ""
     Private LastSelectedPainterModelPath As String = ""
     Private IsUpdatingAutoRouteModelSelectors As Boolean = False
+    Private AutoRoutePreviewHasResult As Boolean = False
     Private ReadOnly UiToolTip As New ToolTip()
     Private ReadOnly GamePathProfiles As New BindingList(Of FormSettings.GamePathProfile)
     Private CurrentRunGamePaths As List(Of FormSettings.GamePathProfile)
@@ -1142,6 +1144,11 @@ Public Class Form1
         AutoPainterShareLabel.Visible = False
         AutoPainterSharePercent.Visible = False
         AutoPainterShareSuffix.Visible = False
+        AutoPainterThresholdLabel.Visible = False
+        AutoPainterThreshold.Visible = False
+        AutoPainterThresholdSuffix.Visible = False
+        AutoRoutePreviewButton.Visible = False
+        AutoRoutePreviewStatusLabel.Visible = False
         AutoArchitectModelLabel.Visible = False
         AutoArchitectModelComboBox.Visible = False
         AutoPainterModelLabel.Visible = False
@@ -1158,26 +1165,38 @@ Public Class Form1
         AutoPainterShareLabel.Visible = Model.IsAutoTextureRouter
         AutoPainterSharePercent.Visible = Model.IsAutoTextureRouter
         AutoPainterShareSuffix.Visible = Model.IsAutoTextureRouter
+        AutoPainterThresholdLabel.Visible = Model.IsAutoTextureRouter
+        AutoPainterThreshold.Visible = Model.IsAutoTextureRouter
+        AutoPainterThresholdSuffix.Visible = Model.IsAutoTextureRouter
+        AutoRoutePreviewButton.Visible = Model.IsAutoTextureRouter
+        AutoRoutePreviewStatusLabel.Visible = Model.IsAutoTextureRouter
         AutoArchitectModelLabel.Visible = Model.IsAutoTextureRouter
         AutoArchitectModelComboBox.Visible = Model.IsAutoTextureRouter
         AutoPainterModelLabel.Visible = Model.IsAutoTextureRouter
         AutoPainterModelComboBox.Visible = Model.IsAutoTextureRouter
         If Model.IsAutoTextureRouter Then
             Dim PainterShareText As String = CInt(AutoPainterSharePercent.Value).ToString()
+            Dim PainterThresholdText As String = AutoPainterThreshold.Value.ToString("0.00", CultureInfo.InvariantCulture)
             Dim ArchitectPath As String = GetSelectedAutoRouteModelPath(AutoArchitectModelComboBox)
             Dim PainterPath As String = GetSelectedAutoRouteModelPath(AutoPainterModelComboBox)
             If ArchitectPath = "" Then ArchitectPath = Model.ArchitectModelPath
             If PainterPath = "" Then PainterPath = Model.PainterModelPath
-            AutoPainterShareSuffix.Text = PainterShareText & "% max of detailed/repeating textures to Painter"
-            SpandrelModelInfoLabel.Text = "Auto Texture Routing: feature-based; up to " & PainterShareText & "% detailed/repeating textures go to Painter, the rest to Architect."
+            AutoPainterShareSuffix.Text = "cap for batches of 10+"
+            AutoPainterThresholdSuffix.Text = "below uses Architect"
+            SpandrelModelInfoLabel.Text = "Auto Texture Routing: feature-based; " & PainterShareText & "% max to Painter for 10+ textures; scores below " & PainterThresholdText & " use Architect."
             Dim RouterTooltip As String = "Feature-based routing (not semantic object recognition)." & Environment.NewLine &
-                "Architect — solid textures: " & ArchitectPath & Environment.NewLine &
-                "Painter — repeating textures: " & PainterPath & Environment.NewLine &
+                "For batches under 10 images, every texture meeting the minimum score is sent to Painter. Larger batches rank eligible textures by score and cap Painter at the selected share." & Environment.NewLine &
+                "Minimum Painter score: " & PainterThresholdText & Environment.NewLine &
+                "Architect model: " & ArchitectPath & Environment.NewLine &
+                "Painter model: " & PainterPath & Environment.NewLine &
                 "Requires two different 4× RGB super-resolution models."
             UiToolTip.SetToolTip(SpandrelModelInfoLabel, RouterTooltip)
             UiToolTip.SetToolTip(PyModel, RouterTooltip)
             UiToolTip.SetToolTip(AutoArchitectModelComboBox, ArchitectPath)
             UiToolTip.SetToolTip(AutoPainterModelComboBox, PainterPath)
+            UiToolTip.SetToolTip(AutoPainterSharePercent, "Maximum Painter share for batches of 10 or more textures. Smaller batches use the score threshold without a percentage cap.")
+            UiToolTip.SetToolTip(AutoPainterThresholdLabel, "Textures below this feature score are assigned to Architect. This is a feature heuristic, not semantic classification.")
+            UiToolTip.SetToolTip(AutoPainterThreshold, "Minimum feature score for Painter eligibility (0.05–1.00). Lower values make more textures eligible.")
             Return
         End If
         If Model.Scale > 0 Then
@@ -1196,6 +1215,7 @@ Public Class Form1
             PyModel.SelectedIndex >= 0 AndAlso PyModel.SelectedIndex < SupportedSpandrelModels.Count Then
             LastSelectedSpandrelModelPath = SupportedSpandrelModels(PyModel.SelectedIndex).FilePath
         End If
+        MarkAutoRoutePreviewStale()
         UpdateSpandrelModelInfo()
     End Sub
 
@@ -1205,6 +1225,7 @@ Public Class Form1
         If ArchitectPath <> "" Then LastSelectedArchitectModelPath = ArchitectPath
         ConfigurePainterRoleSelector(LastSelectedPainterModelPath)
         UpdateAutoTextureRouterDefaultPaths()
+        MarkAutoRoutePreviewStale()
         UpdateSpandrelModelInfo()
     End Sub
 
@@ -1213,12 +1234,149 @@ Public Class Form1
         Dim PainterPath As String = GetSelectedAutoRouteModelPath(AutoPainterModelComboBox)
         If PainterPath <> "" Then LastSelectedPainterModelPath = PainterPath
         UpdateAutoTextureRouterDefaultPaths()
+        MarkAutoRoutePreviewStale()
         UpdateSpandrelModelInfo()
     End Sub
 
     Private Sub AutoPainterSharePercent_ValueChanged(sender As Object, e As EventArgs) Handles AutoPainterSharePercent.ValueChanged
+        MarkAutoRoutePreviewStale()
         UpdateSpandrelModelInfo()
     End Sub
+
+    Private Sub AutoPainterThreshold_ValueChanged(sender As Object, e As EventArgs) Handles AutoPainterThreshold.ValueChanged
+        MarkAutoRoutePreviewStale()
+        UpdateSpandrelModelInfo()
+    End Sub
+
+    Private Sub MarkAutoRoutePreviewStale()
+        If Not AutoRoutePreviewHasResult Then Return
+        AutoRoutePreviewHasResult = False
+        AutoRoutePreviewStatusLabel.Text = "Settings changed; run preview again."
+    End Sub
+
+    Private Async Sub AutoRoutePreviewButton_Click(sender As Object, e As EventArgs) Handles AutoRoutePreviewButton.Click
+        Dim InitialFolder As String = InputTextBox.Text.Trim()
+        If Not Directory.Exists(InitialFolder) Then InitialFolder = Application.StartupPath
+        Dim PreviewFolder As String = ""
+        Using FolderPicker As New FolderBrowserDialog
+            FolderPicker.Description = "Choose the texture folder to preview. This analyzes assignments only and does not run either upscaler."
+            FolderPicker.ShowNewFolderButton = False
+            FolderPicker.SelectedPath = InitialFolder
+            If FolderPicker.ShowDialog(Me) <> DialogResult.OK Then Return
+            PreviewFolder = FolderPicker.SelectedPath
+        End Using
+
+        Dim PythonExecutable As String = FindPythonExecutable()
+        If PythonExecutable = "" Then
+            MessageBox.Show(Me, "Auto Texture Routing preview needs Python 3.10 or newer. Add python.exe to PATH, place it beside AutoCrispy, or set AUTOCRISPY_PYTHON to its full path.", "Python not found", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+            Return
+        End If
+        Dim RunnerPath As String = Path.Combine(Application.StartupPath, SpandrelRunnerName)
+        If Not File.Exists(RunnerPath) Then
+            MessageBox.Show(Me, "The AutoCrispy Spandrel runner was not found: " & RunnerPath, "Runner not found", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+            Return
+        End If
+
+        Dim Package As FormSettings.PythonPackage
+        Try
+            Package = GetSelectedPythonPackage()
+        Catch ex As Exception
+            MessageBox.Show(Me, ex.Message, "Auto Texture Routing", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+            Return
+        End Try
+
+        Dim PreviousPyModelEnabled As Boolean = PyModel.Enabled
+        Dim PreviousRefreshEnabled As Boolean = RefreshSpandrelModelsButton.Enabled
+        Dim PreviousArchitectEnabled As Boolean = AutoArchitectModelComboBox.Enabled
+        Dim PreviousPainterEnabled As Boolean = AutoPainterModelComboBox.Enabled
+        Dim PreviousShareEnabled As Boolean = AutoPainterSharePercent.Enabled
+        Dim PreviousThresholdEnabled As Boolean = AutoPainterThreshold.Enabled
+        AutoRoutePreviewButton.Enabled = False
+        PyModel.Enabled = False
+        RefreshSpandrelModelsButton.Enabled = False
+        AutoArchitectModelComboBox.Enabled = False
+        AutoPainterModelComboBox.Enabled = False
+        AutoPainterSharePercent.Enabled = False
+        AutoPainterThreshold.Enabled = False
+        AutoRoutePreviewStatusLabel.Text = "Analyzing texture features…"
+        Dim PreviewDebugEnabled As Boolean = DebugCheckbox.Checked
+        Try
+            Dim PreviewItems As List(Of AutoRoutePreviewItem) = Await Task.Run(
+                Function() RunAutoRoutePreview(PythonExecutable, RunnerPath, PreviewFolder, Package, PreviewDebugEnabled))
+            Dim PainterCount As Integer = PreviewItems.Count(Function(Item) String.Equals(Item.Role, "Painter", StringComparison.OrdinalIgnoreCase))
+            AutoRoutePreviewStatusLabel.Text = "Preview: " & PainterCount.ToString() & " Painter · " & (PreviewItems.Count - PainterCount).ToString() & " Architect"
+            AutoRoutePreviewHasResult = True
+            Using PreviewDialog As New AutoRoutePreviewDialog(PreviewItems, PreviewFolder,
+                Package.PainterShare, CDbl(Package.PainterThreshold), Package.ArchitectModel, Package.PainterModel)
+                PreviewDialog.ShowDialog(Me)
+            End Using
+        Catch ex As Exception
+            AutoRoutePreviewHasResult = False
+            AutoRoutePreviewStatusLabel.Text = "Preview failed."
+            MessageBox.Show(Me, "Could not preview texture routing." & Environment.NewLine & ex.Message,
+                "Auto Texture Routing preview", MessageBoxButtons.OK, MessageBoxIcon.Error)
+        Finally
+            AutoRoutePreviewButton.Enabled = True
+            PyModel.Enabled = PreviousPyModelEnabled
+            RefreshSpandrelModelsButton.Enabled = PreviousRefreshEnabled
+            AutoArchitectModelComboBox.Enabled = PreviousArchitectEnabled
+            AutoPainterModelComboBox.Enabled = PreviousPainterEnabled
+            AutoPainterSharePercent.Enabled = PreviousShareEnabled
+            AutoPainterThreshold.Enabled = PreviousThresholdEnabled
+        End Try
+    End Sub
+
+    Private Function RunAutoRoutePreview(PythonExecutable As String, RunnerPath As String, SourceFolder As String,
+                                         Package As FormSettings.PythonPackage, DebugEnabled As Boolean) As List(Of AutoRoutePreviewItem)
+        Dim StartInfo As New ProcessStartInfo(PythonExecutable,
+            MakeSpandrelPreviewCommand(RunnerPath, SourceFolder, Package, DebugEnabled))
+        StartInfo.WorkingDirectory = Application.StartupPath
+        StartInfo.RedirectStandardOutput = True
+        StartInfo.RedirectStandardError = True
+        StartInfo.UseShellExecute = False
+        StartInfo.CreateNoWindow = True
+
+        Using PreviewProcess As Process = Process.Start(StartInfo)
+            If PreviewProcess Is Nothing Then Throw New InvalidOperationException("Failed to start the route preview process.")
+            Dim StandardOutputTask = PreviewProcess.StandardOutput.ReadToEndAsync()
+            Dim StandardErrorTask = PreviewProcess.StandardError.ReadToEndAsync()
+            PreviewProcess.WaitForExit()
+            Dim StandardOutput As String = StandardOutputTask.Result
+            Dim StandardError As String = StandardErrorTask.Result
+            If PreviewProcess.ExitCode <> 0 Then
+                Dim Details As String = If(StandardError.Trim() <> "", StandardError.Trim(), StandardOutput.Trim())
+                If Details.Length > 2000 Then Details = Details.Substring(0, 2000) & "..."
+                Throw New InvalidOperationException("Python route analysis failed (exit code " & PreviewProcess.ExitCode.ToString() & "). " & Details)
+            End If
+
+            Dim Result As New List(Of AutoRoutePreviewItem)
+            Const PreviewItemPrefix As String = "AUTOCRISPY_ROUTE_PREVIEW_ITEM:"
+            For Each OutputLine As String In StandardOutput.Split(New String() {vbCrLf, vbLf}, StringSplitOptions.RemoveEmptyEntries)
+                If Not OutputLine.StartsWith(PreviewItemPrefix, StringComparison.Ordinal) Then Continue For
+                Dim Fields As String() = OutputLine.Substring(PreviewItemPrefix.Length).Split(ControlChars.Tab)
+                If Fields.Length < 9 Then Continue For
+                Dim Item As New AutoRoutePreviewItem With {
+                    .FilePath = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(Fields(0))),
+                    .Role = Fields(1),
+                    .Score = ParsePreviewMetric(Fields(2)),
+                    .Detail = ParsePreviewMetric(Fields(3)),
+                    .EdgeDensity = ParsePreviewMetric(Fields(4)),
+                    .OrientationEntropy = ParsePreviewMetric(Fields(5)),
+                    .LocalPatternEntropy = ParsePreviewMetric(Fields(6)),
+                    .Periodicity = ParsePreviewMetric(Fields(7)),
+                    .DecisionReason = Fields(8)
+                }
+                Result.Add(Item)
+            Next
+            Return Result
+        End Using
+    End Function
+
+    Private Shared Function ParsePreviewMetric(Value As String) As Double
+        Dim Result As Double = 0.0R
+        Double.TryParse(Value, NumberStyles.Float, CultureInfo.InvariantCulture, Result)
+        Return Result
+    End Function
 
     Private Async Sub RefreshSpandrelModelsButton_Click(sender As Object, e As EventArgs) Handles RefreshSpandrelModelsButton.Click
         Await RefreshSupportedSpandrelModels(Root)
@@ -1254,11 +1412,11 @@ Public Class Form1
                 LastSelectedArchitectModelPath = ArchitectPath
                 LastSelectedPainterModelPath = PainterPath
                 Return New FormSettings.PythonPackage(AutoTextureRouterToken, CInt(PyTileSize.Value), PyCPU.Checked, True, True,
-                    ArchitectPath, PainterPath, CInt(AutoPainterSharePercent.Value))
+                    ArchitectPath, PainterPath, CInt(AutoPainterSharePercent.Value), CDec(AutoPainterThreshold.Value))
             End If
         End If
         Return New FormSettings.PythonPackage(GetSelectedUpscaleModel(), CInt(PyTileSize.Value), PyCPU.Checked, UseSpandrelFormats,
-            False, LastSelectedArchitectModelPath, LastSelectedPainterModelPath, CInt(AutoPainterSharePercent.Value))
+            False, LastSelectedArchitectModelPath, LastSelectedPainterModelPath, CInt(AutoPainterSharePercent.Value), CDec(AutoPainterThreshold.Value))
     End Function
 
     Sub MoveShowGroup(ByRef Source As GroupBox)
@@ -2025,6 +2183,9 @@ Public Class Form1
             Dim PainterShare As Integer = Package.PainterShare
             If PainterShare < 10 OrElse PainterShare > 90 Then PainterShare = 30
             Result.AddArguement("--painter-share", PainterShare.ToString())
+            Dim PainterThreshold As Decimal = Package.PainterThreshold
+            If PainterThreshold < 0.05D OrElse PainterThreshold > 1D Then PainterThreshold = 0.34D
+            Result.AddArguement("--painter-threshold", PainterThreshold.ToString(CultureInfo.InvariantCulture))
         Else
             Result.AddArguement(Quote(Package.Model))
         End If
@@ -2034,6 +2195,22 @@ Public Class Form1
         Result.AddArguement("--cpu", Package.CPUOnly)
         If GenericModel Then Result.AddArguement("--generic-model")
         If LoadedSettings.ExpertSettings.Logging Then Result.AddArguement("--debug")
+        Return Result.GetArguements
+    End Function
+
+    Private Function MakeSpandrelPreviewCommand(RunnerPath As String, SourceFolder As String,
+                                                 Package As FormSettings.PythonPackage, DebugEnabled As Boolean) As String
+        Dim Result As New ArguementString
+        Result.AddArguement(Quote(RunnerPath))
+        Result.AddArguement("--preview-route")
+        Result.AddArguement("--input", Quote(SourceFolder))
+        Dim PainterShare As Integer = Package.PainterShare
+        If PainterShare < 10 OrElse PainterShare > 90 Then PainterShare = 30
+        Result.AddArguement("--painter-share", PainterShare.ToString())
+        Dim PainterThreshold As Decimal = Package.PainterThreshold
+        If PainterThreshold < 0.05D OrElse PainterThreshold > 1D Then PainterThreshold = 0.34D
+        Result.AddArguement("--painter-threshold", PainterThreshold.ToString(CultureInfo.InvariantCulture))
+        If DebugEnabled Then Result.AddArguement("--debug")
         Return Result.GetArguements
     End Function
 

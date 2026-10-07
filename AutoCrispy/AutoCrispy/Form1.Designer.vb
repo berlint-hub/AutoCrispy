@@ -96,6 +96,11 @@ Partial Class Form1
         Me.AutoPainterShareLabel = New System.Windows.Forms.Label()
         Me.AutoPainterSharePercent = New System.Windows.Forms.NumericUpDown()
         Me.AutoPainterShareSuffix = New System.Windows.Forms.Label()
+        Me.AutoPainterThresholdLabel = New System.Windows.Forms.Label()
+        Me.AutoPainterThreshold = New System.Windows.Forms.NumericUpDown()
+        Me.AutoPainterThresholdSuffix = New System.Windows.Forms.Label()
+        Me.AutoRoutePreviewButton = New System.Windows.Forms.Button()
+        Me.AutoRoutePreviewStatusLabel = New System.Windows.Forms.Label()
         Me.AutoArchitectModelLabel = New System.Windows.Forms.Label()
         Me.AutoArchitectModelComboBox = New System.Windows.Forms.ComboBox()
         Me.AutoPainterModelLabel = New System.Windows.Forms.Label()
@@ -170,6 +175,7 @@ Partial Class Form1
         Me.PyGroup.SuspendLayout()
         CType(Me.PyTileSize, System.ComponentModel.ISupportInitialize).BeginInit()
         CType(Me.AutoPainterSharePercent, System.ComponentModel.ISupportInitialize).BeginInit()
+        CType(Me.AutoPainterThreshold, System.ComponentModel.ISupportInitialize).BeginInit()
         Me.ChainGroup.SuspendLayout()
         CType(Me.ChainPreview, System.ComponentModel.ISupportInitialize).BeginInit()
         Me.ChainContext.SuspendLayout()
@@ -857,6 +863,11 @@ Partial Class Form1
         '
         Me.PyGroup.Controls.Add(Me.PyCPU)
         Me.PyGroup.Controls.Add(Me.AutoPainterShareSuffix)
+        Me.PyGroup.Controls.Add(Me.AutoPainterThresholdSuffix)
+        Me.PyGroup.Controls.Add(Me.AutoPainterThreshold)
+        Me.PyGroup.Controls.Add(Me.AutoPainterThresholdLabel)
+        Me.PyGroup.Controls.Add(Me.AutoRoutePreviewStatusLabel)
+        Me.PyGroup.Controls.Add(Me.AutoRoutePreviewButton)
         Me.PyGroup.Controls.Add(Me.AutoArchitectModelComboBox)
         Me.PyGroup.Controls.Add(Me.AutoArchitectModelLabel)
         Me.PyGroup.Controls.Add(Me.AutoPainterModelComboBox)
@@ -875,7 +886,7 @@ Partial Class Form1
         Me.PyGroup.Margin = New System.Windows.Forms.Padding(4, 5, 4, 5)
         Me.PyGroup.Name = "PyGroup"
         Me.PyGroup.Padding = New System.Windows.Forms.Padding(4, 5, 4, 5)
-        Me.PyGroup.Size = New System.Drawing.Size(594, 308)
+        Me.PyGroup.Size = New System.Drawing.Size(594, 324)
         Me.PyGroup.TabIndex = 12
         Me.PyGroup.TabStop = False
         Me.PyGroup.Text = "ESRGAN"
@@ -887,7 +898,7 @@ Partial Class Form1
         Me.AutoPainterShareLabel.Name = "AutoPainterShareLabel"
         Me.AutoPainterShareLabel.Size = New System.Drawing.Size(83, 20)
         Me.AutoPainterShareLabel.TabIndex = 10
-        Me.AutoPainterShareLabel.Text = "Painter share:"
+        Me.AutoPainterShareLabel.Text = "Painter cap:"
         Me.AutoPainterShareLabel.Visible = False
         '
         'AutoPainterSharePercent
@@ -908,10 +919,64 @@ Partial Class Form1
         Me.AutoPainterShareSuffix.AutoEllipsis = True
         Me.AutoPainterShareSuffix.Location = New System.Drawing.Point(176, 198)
         Me.AutoPainterShareSuffix.Name = "AutoPainterShareSuffix"
-        Me.AutoPainterShareSuffix.Size = New System.Drawing.Size(390, 20)
+        Me.AutoPainterShareSuffix.Size = New System.Drawing.Size(98, 20)
         Me.AutoPainterShareSuffix.TabIndex = 12
-        Me.AutoPainterShareSuffix.Text = "30% max of detailed/repeating textures to Painter"
+        Me.AutoPainterShareSuffix.Text = "10+ files only"
         Me.AutoPainterShareSuffix.Visible = False
+        '
+        'AutoPainterThresholdLabel
+        '
+        Me.AutoPainterThresholdLabel.Location = New System.Drawing.Point(280, 198)
+        Me.AutoPainterThresholdLabel.Name = "AutoPainterThresholdLabel"
+        Me.AutoPainterThresholdLabel.Size = New System.Drawing.Size(72, 20)
+        Me.AutoPainterThresholdLabel.TabIndex = 17
+        Me.AutoPainterThresholdLabel.Text = "Min score:"
+        Me.AutoPainterThresholdLabel.Visible = False
+        '
+        'AutoPainterThreshold
+        '
+        Me.AutoPainterThreshold.DecimalPlaces = 2
+        Me.AutoPainterThreshold.Increment = New Decimal(New Integer() {1, 0, 0, 131072})
+        Me.AutoPainterThreshold.Location = New System.Drawing.Point(354, 194)
+        Me.AutoPainterThreshold.Maximum = New Decimal(New Integer() {1, 0, 0, 0})
+        Me.AutoPainterThreshold.Minimum = New Decimal(New Integer() {5, 0, 0, 131072})
+        Me.AutoPainterThreshold.Name = "AutoPainterThreshold"
+        Me.AutoPainterThreshold.Size = New System.Drawing.Size(66, 26)
+        Me.AutoPainterThreshold.TabIndex = 18
+        Me.AutoPainterThreshold.TextAlign = System.Windows.Forms.HorizontalAlignment.Center
+        Me.AutoPainterThreshold.Value = New Decimal(New Integer() {34, 0, 0, 131072})
+        Me.AutoPainterThreshold.Visible = False
+        '
+        'AutoPainterThresholdSuffix
+        '
+        Me.AutoPainterThresholdSuffix.AutoEllipsis = True
+        Me.AutoPainterThresholdSuffix.Location = New System.Drawing.Point(426, 198)
+        Me.AutoPainterThresholdSuffix.Name = "AutoPainterThresholdSuffix"
+        Me.AutoPainterThresholdSuffix.Size = New System.Drawing.Size(153, 20)
+        Me.AutoPainterThresholdSuffix.TabIndex = 19
+        Me.AutoPainterThresholdSuffix.Text = "below uses Architect"
+        Me.AutoPainterThresholdSuffix.Visible = False
+        '
+        'AutoRoutePreviewButton
+        '
+        Me.AutoRoutePreviewButton.Location = New System.Drawing.Point(9, 292)
+        Me.AutoRoutePreviewButton.Name = "AutoRoutePreviewButton"
+        Me.AutoRoutePreviewButton.Size = New System.Drawing.Size(162, 27)
+        Me.AutoRoutePreviewButton.TabIndex = 20
+        Me.AutoRoutePreviewButton.Text = "Preview assignments..."
+        Me.AutoRoutePreviewButton.UseVisualStyleBackColor = True
+        Me.AutoRoutePreviewButton.Visible = False
+        '
+        'AutoRoutePreviewStatusLabel
+        '
+        Me.AutoRoutePreviewStatusLabel.AutoEllipsis = True
+        Me.AutoRoutePreviewStatusLabel.ForeColor = System.Drawing.SystemColors.GrayText
+        Me.AutoRoutePreviewStatusLabel.Location = New System.Drawing.Point(180, 296)
+        Me.AutoRoutePreviewStatusLabel.Name = "AutoRoutePreviewStatusLabel"
+        Me.AutoRoutePreviewStatusLabel.Size = New System.Drawing.Size(399, 20)
+        Me.AutoRoutePreviewStatusLabel.TabIndex = 21
+        Me.AutoRoutePreviewStatusLabel.Text = "Preview analyzes routes only; no upscaling."
+        Me.AutoRoutePreviewStatusLabel.Visible = False
         '
         'AutoArchitectModelLabel
         '
@@ -1621,7 +1686,7 @@ Partial Class Form1
         '
         Me.AutoScaleDimensions = New System.Drawing.SizeF(9.0!, 20.0!)
         Me.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font
-        Me.ClientSize = New System.Drawing.Size(980, 585)
+        Me.ClientSize = New System.Drawing.Size(980, 600)
         Me.Controls.Add(Me.xBRZGroup)
         Me.Controls.Add(Me.DDxGroup)
         Me.Controls.Add(Me.TabGroup)
@@ -1662,6 +1727,7 @@ Partial Class Form1
         Me.PyGroup.PerformLayout()
         CType(Me.PyTileSize, System.ComponentModel.ISupportInitialize).EndInit()
         CType(Me.AutoPainterSharePercent, System.ComponentModel.ISupportInitialize).EndInit()
+        CType(Me.AutoPainterThreshold, System.ComponentModel.ISupportInitialize).EndInit()
         Me.ChainGroup.ResumeLayout(False)
         CType(Me.ChainPreview, System.ComponentModel.ISupportInitialize).EndInit()
         Me.ChainContext.ResumeLayout(False)
@@ -1803,6 +1869,11 @@ Partial Class Form1
     Friend WithEvents AutoPainterShareLabel As Label
     Friend WithEvents AutoPainterSharePercent As NumericUpDown
     Friend WithEvents AutoPainterShareSuffix As Label
+    Friend WithEvents AutoPainterThresholdLabel As Label
+    Friend WithEvents AutoPainterThreshold As NumericUpDown
+    Friend WithEvents AutoPainterThresholdSuffix As Label
+    Friend WithEvents AutoRoutePreviewButton As Button
+    Friend WithEvents AutoRoutePreviewStatusLabel As Label
     Friend WithEvents AutoArchitectModelLabel As Label
     Friend WithEvents AutoArchitectModelComboBox As ComboBox
     Friend WithEvents AutoPainterModelLabel As Label

@@ -308,6 +308,86 @@ class SpandrelRunnerTests(unittest.TestCase):
             self.assertIsNone(args.architect_model)
             self.assertIsNone(args.painter_model)
 
+    def test_preview_route_cli_needs_only_an_input_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with patch.object(
+                sys,
+                "argv",
+                [
+                    "spandrel_upscale.py",
+                    "--preview-route",
+                    "--input",
+                    str(root),
+                    "--painter-share",
+                    "45",
+                    "--painter-threshold",
+                    "0.27",
+                ],
+            ):
+                args = runner.parse_args()
+            self.assertTrue(args.preview_route)
+            self.assertIsNone(args.output)
+            self.assertEqual(args.painter_share, 45)
+            self.assertAlmostEqual(args.painter_threshold, 0.27)
+
+    def test_preview_route_reports_feature_scores_and_assignments_without_loading_models(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            input_folder = Path(temporary)
+            low_score = input_folder / "architect.png"
+            high_score = input_folder / "painter.png"
+            low_score.touch()
+            high_score.touch()
+            args = types.SimpleNamespace(
+                input=input_folder,
+                painter_share=30,
+                painter_threshold=0.34,
+            )
+            features = {
+                low_score: {
+                    "score": 0.12,
+                    "detail": 0.1,
+                    "edge_density": 0.2,
+                    "orientation_entropy": 0.3,
+                    "local_pattern_entropy": 0.4,
+                    "periodicity": 0.5,
+                },
+                high_score: {
+                    "score": 0.72,
+                    "detail": 0.7,
+                    "edge_density": 0.6,
+                    "orientation_entropy": 0.5,
+                    "local_pattern_entropy": 0.8,
+                    "periodicity": 0.9,
+                },
+            }
+            output = io.StringIO()
+            with (
+                patch.object(runner, "_texture_features", side_effect=lambda path: features[path]),
+                contextlib.redirect_stdout(output),
+            ):
+                result = runner._preview_auto_route(args)
+
+            self.assertEqual(result, 0)
+            log = output.getvalue()
+            self.assertIn("AUTOCRISPY_ROUTE_PREVIEW_SUMMARY: total=2; Architect=1; Painter=1", log)
+            self.assertIn("AUTOCRISPY_ROUTE_PREVIEW_ITEM:", log)
+            self.assertIn("\tPainter\t0.720000\t", log)
+            self.assertIn("\tArchitect\t0.120000\t", log)
+            self.assertIn("Eligible and selected for Painter", log)
+            self.assertIn("Below minimum Painter score", log)
+
+    def test_painter_threshold_filters_low_scoring_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            scored = [
+                (root / "low.png", {"score": 0.30}),
+                (root / "borderline.png", {"score": 0.45}),
+                (root / "high.png", {"score": 0.82}),
+            ]
+            selected = runner._select_painter_files(scored, painter_share=100, painter_threshold=0.5)
+            self.assertEqual(selected, {root / "high.png"})
+
     def test_auto_route_cli_accepts_two_models_without_a_single_model_argument(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
