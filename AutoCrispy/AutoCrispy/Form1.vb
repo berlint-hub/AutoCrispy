@@ -1594,7 +1594,7 @@ Public Class Form1
         Return ""
     End Function
 
-    Public Function GetSelectedPythonPackage() As FormSettings.PythonPackage
+    Public Function GetSelectedPythonPackage(Optional IncludeRoutePreferences As Boolean = True) As FormSettings.PythonPackage
         Dim BackendName As String = If(ExeComboBox.SelectedItem, "").ToString()
         Dim UseSpandrelFormats As Boolean = BackendName = PLKSRBackendName OrElse BackendName = DAT2BackendName OrElse BackendName = SpandrelBackendName
         If BackendName = SpandrelBackendName AndAlso PyModel.SelectedIndex >= 0 AndAlso PyModel.SelectedIndex < SupportedSpandrelModels.Count Then
@@ -1614,8 +1614,10 @@ Public Class Form1
                     ArchitectPath, PainterPath, CInt(AutoPainterSharePercent.Value), CDec(AutoPainterThreshold.Value))
             End If
         End If
+        Dim ArchitectPreference As String = If(IncludeRoutePreferences, LastSelectedArchitectModelPath, String.Empty)
+        Dim PainterPreference As String = If(IncludeRoutePreferences, LastSelectedPainterModelPath, String.Empty)
         Return New FormSettings.PythonPackage(GetSelectedUpscaleModel(), CInt(PyTileSize.Value), PyCPU.Checked, UseSpandrelFormats,
-            False, LastSelectedArchitectModelPath, LastSelectedPainterModelPath, CInt(AutoPainterSharePercent.Value), CDec(AutoPainterThreshold.Value))
+            False, ArchitectPreference, PainterPreference, CInt(AutoPainterSharePercent.Value), CDec(AutoPainterThreshold.Value))
     End Function
 
     Sub MoveShowGroup(ByRef Source As GroupBox)

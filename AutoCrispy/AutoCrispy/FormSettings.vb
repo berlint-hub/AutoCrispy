@@ -147,7 +147,9 @@
             AnimePak = New Anime4kPackage(Source.AnimeCPPScale.Value, Source.AnimeCppPre.Checked, Source.AnimeCppPost.Checked, Source.AnimeCppPreFilter.Checked, Source.AnimeCppPostFilter.Checked, GetFilters(Source.AnimeCppPreFilters), GetFilters(Source.AnimeCppPostFilters), Source.AnimeCPPGpu.Checked, Source.AnimeCPPCnn.Checked)
             TexConvPak = New DDxPackage(Source.DDxModeBox.SelectedItem, Source.DDxFormatLabel.Text.Replace("Format: ", ""), Source.DDxConvFormat.SelectedItem, Source.FlComboBox.SelectedItem, Source.Dx9CheckBox.Checked, Source.Dx10Checkbox.Checked, Source.SepAlphaCheckBox.Checked, Source.PmAlphaCheckBox.Checked, Source.AlphaCheckBox.Checked)
             xBRZPak = New xBRZPackage(Source.xBRZScale.Value)
-            PythonPak = Source.GetSelectedPythonPackage()
+            Dim SavedPythonPackage As PythonPackage = Source.GetSelectedPythonPackage()
+            SavedPythonPackage.PreserveRoutePreferencesWhenSerializing = True
+            PythonPak = SavedPythonPackage
             Paths = New ProgramPaths(Source.InputTextBox.Text, Source.OutputTextBox.Text, Source.ExeTextBox.Text)
             GamePathProfiles = Source.GetGamePathProfileSnapshot()
             GamePathProfilesConfigured = True
@@ -281,7 +283,7 @@
                 Case "DAT2"
                     Package = New PythonPackage(Source.GetSelectedUpscaleModel(), Source.PyTileSize.Value, Source.PyCPU.Checked, True)
                 Case "Spandrel"
-                    Package = Source.GetSelectedPythonPackage()
+                    Package = Source.GetSelectedPythonPackage(False)
             End Select
         End Sub
     End Structure
@@ -414,6 +416,17 @@
         Public Property PainterShare As Integer
         Public Property PainterThreshold As Decimal
         Public Property FileTypes As List(Of String)
+        <Xml.Serialization.XmlIgnore()>
+        Public Property PreserveRoutePreferencesWhenSerializing As Boolean
+
+        Public Function ShouldSerializeArchitectModel() As Boolean
+            Return AutoRouteEnabled OrElse PreserveRoutePreferencesWhenSerializing
+        End Function
+
+        Public Function ShouldSerializePainterModel() As Boolean
+            Return AutoRouteEnabled OrElse PreserveRoutePreferencesWhenSerializing
+        End Function
+
         Public Sub New(_Model As String, _TileSize As Integer, _CPUOnly As Boolean, Optional _UseSpandrelFormats As Boolean = False,
                        Optional _AutoRouteEnabled As Boolean = False, Optional _ArchitectModel As String = "",
                        Optional _PainterModel As String = "", Optional _PainterShare As Integer = 30,
