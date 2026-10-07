@@ -15,6 +15,9 @@ Public Class Form1
     Dim LoadedSettings As FormSettings.Settings
     Dim SkipList As New List(Of String)
     Private LastSelectedSpandrelModelPath As String = ""
+    Private LastSelectedArchitectModelPath As String = ""
+    Private LastSelectedPainterModelPath As String = ""
+    Private IsUpdatingAutoRouteModelSelectors As Boolean = False
     Private ReadOnly UiToolTip As New ToolTip()
     Private ReadOnly GamePathProfiles As New BindingList(Of FormSettings.GamePathProfile)
     Private CurrentRunGamePaths As List(Of FormSettings.GamePathProfile)
@@ -390,9 +393,10 @@ Public Class Form1
             SupportedSpandrelModels = FoundModels
             Dim AutoRouterChoice As SpandrelModelInfo = CreateAutoTextureRouterChoice(FoundModels)
             If AutoRouterChoice IsNot Nothing Then SupportedSpandrelModels.Insert(0, AutoRouterChoice)
+            ConfigureAutoRouteModelSelectors()
             If CompatibleModelCount > 0 Then
                 Dim ScanSummary As String = "Found " & CompatibleModelCount.ToString() & " compatible model(s)."
-                If AutoRouterChoice IsNot Nothing Then ScanSummary &= " Auto Architect/Painter routing is available."
+                If AutoRouterChoice IsNot Nothing Then ScanSummary &= " Auto Texture Routing is available for compatible 4× models."
                 SetModelScanStatus(ScanSummary)
                 AddSpandrelBackends()
                 Dim CurrentBackend As String = If(ExeComboBox.SelectedItem, "").ToString()
@@ -526,20 +530,16 @@ Public Class Form1
     End Function
 
     Private Function CreateAutoTextureRouterChoice(Models As List(Of SpandrelModelInfo)) As SpandrelModelInfo
-        Dim ArchitectModel As SpandrelModelInfo = Nothing
-        Dim PainterModel As SpandrelModelInfo = Nothing
-        For Each Model As SpandrelModelInfo In Models
-            If Model.Scale <> 4 OrElse String.IsNullOrWhiteSpace(Model.FilePath) Then Continue For
-            Dim ModelStem As String = Path.GetFileNameWithoutExtension(Model.FilePath)
-            If ModelStem.Equals("best_realesrnet", StringComparison.OrdinalIgnoreCase) OrElse
-                ModelStem.Equals("architect", StringComparison.OrdinalIgnoreCase) Then
-                If ArchitectModel Is Nothing Then ArchitectModel = Model
-            ElseIf ModelStem.Equals("best_swinir", StringComparison.OrdinalIgnoreCase) OrElse
-                ModelStem.Equals("painter", StringComparison.OrdinalIgnoreCase) Then
-                If PainterModel Is Nothing Then PainterModel = Model
-            End If
-        Next
-        If ArchitectModel Is Nothing OrElse PainterModel Is Nothing Then Return Nothing
+        Dim Candidates As List(Of SpandrelModelInfo) = GetAutoRouteCandidateModels(Models)
+        If Candidates.Count < 2 Then Return Nothing
+
+        Dim ArchitectModel As SpandrelModelInfo = FindAutoRouteRoleModel(
+            Candidates, LastSelectedArchitectModelPath, "", New String() {"best_realesrnet", "architect"})
+        If ArchitectModel Is Nothing Then Return Nothing
+        Dim PainterModel As SpandrelModelInfo = FindAutoRouteRoleModel(
+            Candidates, LastSelectedPainterModelPath, ArchitectModel.FilePath, New String() {"best_swinir", "painter"})
+        If PainterModel Is Nothing Then Return Nothing
+
         Return New SpandrelModelInfo With {
             .FilePath = AutoTextureRouterToken,
             .Architecture = "Automatic texture router",
@@ -551,6 +551,46 @@ Public Class Form1
             .ArchitectModelPath = ArchitectModel.FilePath,
             .PainterModelPath = PainterModel.FilePath
         }
+    End Function
+
+    Private Function GetAutoRouteCandidateModels(Models As IEnumerable(Of SpandrelModelInfo)) As List(Of SpandrelModelInfo)
+        Dim Candidates As New List(Of SpandrelModelInfo)
+        If Models Is Nothing Then Return Candidates
+        For Each Model As SpandrelModelInfo In Models
+            If IsAutoRouteCompatibleModel(Model) Then Candidates.Add(Model)
+        Next
+        Return Candidates
+    End Function
+
+    Private Shared Function IsAutoRouteCompatibleModel(Model As SpandrelModelInfo) As Boolean
+        Return Model IsNot Nothing AndAlso Not Model.IsAutoTextureRouter AndAlso
+            Model.Scale = 4 AndAlso Model.InputChannels = 3 AndAlso Model.OutputChannels = 3 AndAlso
+            String.Equals(Model.Purpose, "SR", StringComparison.OrdinalIgnoreCase) AndAlso
+            Not String.IsNullOrWhiteSpace(Model.FilePath)
+    End Function
+
+    Private Shared Function FindAutoRouteRoleModel(Models As List(Of SpandrelModelInfo), PreferredPath As String,
+                                                   ExcludedPath As String, PreferredStems As String()) As SpandrelModelInfo
+        If Not String.IsNullOrWhiteSpace(PreferredPath) Then
+            For Each Model As SpandrelModelInfo In Models
+                If Not String.Equals(Model.FilePath, ExcludedPath, StringComparison.OrdinalIgnoreCase) AndAlso
+                    String.Equals(Model.FilePath, PreferredPath, StringComparison.OrdinalIgnoreCase) Then Return Model
+            Next
+        End If
+
+        If PreferredStems IsNot Nothing Then
+            For Each PreferredStem As String In PreferredStems
+                For Each Model As SpandrelModelInfo In Models
+                    If String.Equals(Model.FilePath, ExcludedPath, StringComparison.OrdinalIgnoreCase) Then Continue For
+                    If String.Equals(Path.GetFileNameWithoutExtension(Model.FilePath), PreferredStem, StringComparison.OrdinalIgnoreCase) Then Return Model
+                Next
+            Next
+        End If
+
+        For Each Model As SpandrelModelInfo In Models
+            If Not String.Equals(Model.FilePath, ExcludedPath, StringComparison.OrdinalIgnoreCase) Then Return Model
+        Next
+        Return Nothing
     End Function
 
     Private Function FindSpandrelModel(SearchRoot As String, CheckpointName As String) As String
@@ -601,11 +641,13 @@ Public Class Form1
                 Return i
             End If
         Next
-        For i As Integer = 0 To SupportedSpandrelModels.Count - 1
-            If SupportedSpandrelModels(i).IsAutoTextureRouter Then Return i
-        Next
+        ' Routing is opt-in: prefer a real single checkpoint unless the user explicitly
+        ' selected the saved router entry in a previous session.
         For i As Integer = 0 To SupportedSpandrelModels.Count - 1
             If Not SupportedSpandrelModels(i).IsAutoTextureRouter Then Return i
+        Next
+        For i As Integer = 0 To SupportedSpandrelModels.Count - 1
+            If SupportedSpandrelModels(i).IsAutoTextureRouter Then Return i
         Next
         Return -1
     End Function
@@ -972,6 +1014,12 @@ Public Class Form1
         UpdateSpandrelModelInfo()
     End Sub
 
+    Public Sub LoadSpandrelModelPreferences(ModelPath As String, ArchitectPath As String, PainterPath As String)
+        LastSelectedSpandrelModelPath = If(ModelPath, String.Empty)
+        LastSelectedArchitectModelPath = If(ArchitectPath, String.Empty)
+        LastSelectedPainterModelPath = If(PainterPath, String.Empty)
+    End Sub
+
     Private Sub ConfigurePythonModelSelector(BackendName As String)
         PyModel.BeginUpdate()
         PyModel.Items.Clear()
@@ -1000,6 +1048,92 @@ Public Class Form1
         UpdateSpandrelModelInfo()
     End Sub
 
+    Private Sub ConfigureAutoRouteModelSelectors()
+        Dim Candidates As List(Of SpandrelModelInfo) = GetAutoRouteCandidateModels(SupportedSpandrelModels)
+        IsUpdatingAutoRouteModelSelectors = True
+        AutoArchitectModelComboBox.BeginUpdate()
+        Try
+            AutoArchitectModelComboBox.Items.Clear()
+            For Each Model As SpandrelModelInfo In Candidates
+                AutoArchitectModelComboBox.Items.Add(Model)
+            Next
+
+            Dim ArchitectModel As SpandrelModelInfo = FindAutoRouteRoleModel(
+                Candidates, LastSelectedArchitectModelPath, "", New String() {"best_realesrnet", "architect"})
+            If ArchitectModel IsNot Nothing Then
+                For i As Integer = 0 To AutoArchitectModelComboBox.Items.Count - 1
+                    Dim Item As SpandrelModelInfo = DirectCast(AutoArchitectModelComboBox.Items(i), SpandrelModelInfo)
+                    If String.Equals(Item.FilePath, ArchitectModel.FilePath, StringComparison.OrdinalIgnoreCase) Then
+                        AutoArchitectModelComboBox.SelectedIndex = i
+                        Exit For
+                    End If
+                Next
+            End If
+        Finally
+            AutoArchitectModelComboBox.EndUpdate()
+            IsUpdatingAutoRouteModelSelectors = False
+        End Try
+
+        Dim SelectedArchitectPath As String = GetSelectedAutoRouteModelPath(AutoArchitectModelComboBox)
+        If SelectedArchitectPath <> "" Then LastSelectedArchitectModelPath = SelectedArchitectPath
+        ConfigurePainterRoleSelector(LastSelectedPainterModelPath)
+        UpdateAutoTextureRouterDefaultPaths()
+        UpdateSpandrelModelInfo()
+    End Sub
+
+    Private Sub ConfigurePainterRoleSelector(PreferredPath As String)
+        Dim Candidates As List(Of SpandrelModelInfo) = GetAutoRouteCandidateModels(SupportedSpandrelModels)
+        Dim ArchitectPath As String = GetSelectedAutoRouteModelPath(AutoArchitectModelComboBox)
+        Dim PainterModel As SpandrelModelInfo = FindAutoRouteRoleModel(
+            Candidates, PreferredPath, ArchitectPath, New String() {"best_swinir", "painter"})
+
+        IsUpdatingAutoRouteModelSelectors = True
+        AutoPainterModelComboBox.BeginUpdate()
+        Try
+            AutoPainterModelComboBox.Items.Clear()
+            For Each Model As SpandrelModelInfo In Candidates
+                If Not String.Equals(Model.FilePath, ArchitectPath, StringComparison.OrdinalIgnoreCase) Then
+                    AutoPainterModelComboBox.Items.Add(Model)
+                End If
+            Next
+
+            If PainterModel IsNot Nothing Then
+                For i As Integer = 0 To AutoPainterModelComboBox.Items.Count - 1
+                    Dim Item As SpandrelModelInfo = DirectCast(AutoPainterModelComboBox.Items(i), SpandrelModelInfo)
+                    If String.Equals(Item.FilePath, PainterModel.FilePath, StringComparison.OrdinalIgnoreCase) Then
+                        AutoPainterModelComboBox.SelectedIndex = i
+                        Exit For
+                    End If
+                Next
+            End If
+        Finally
+            AutoPainterModelComboBox.EndUpdate()
+            IsUpdatingAutoRouteModelSelectors = False
+        End Try
+
+        Dim SelectedPainterPath As String = GetSelectedAutoRouteModelPath(AutoPainterModelComboBox)
+        If SelectedPainterPath <> "" Then LastSelectedPainterModelPath = SelectedPainterPath
+    End Sub
+
+    Private Function GetSelectedAutoRouteModelPath(Selector As ComboBox) As String
+        If Selector Is Nothing OrElse Selector.SelectedIndex < 0 Then Return ""
+        Dim Model As SpandrelModelInfo = TryCast(Selector.SelectedItem, SpandrelModelInfo)
+        If Model Is Nothing Then Return ""
+        Return Model.FilePath
+    End Function
+
+    Private Sub UpdateAutoTextureRouterDefaultPaths()
+        Dim ArchitectPath As String = GetSelectedAutoRouteModelPath(AutoArchitectModelComboBox)
+        Dim PainterPath As String = GetSelectedAutoRouteModelPath(AutoPainterModelComboBox)
+        For Each Model As SpandrelModelInfo In SupportedSpandrelModels
+            If Model.IsAutoTextureRouter Then
+                If ArchitectPath <> "" Then Model.ArchitectModelPath = ArchitectPath
+                If PainterPath <> "" Then Model.PainterModelPath = PainterPath
+                Exit For
+            End If
+        Next
+    End Sub
+
     Private Sub UpdateSpandrelModelInfo()
         Dim IsSpandrelSelected As Boolean = String.Equals(If(ExeComboBox.SelectedItem, "").ToString(), SpandrelBackendName, StringComparison.OrdinalIgnoreCase)
         SpandrelModelInfoLabel.Visible = IsSpandrelSelected
@@ -1008,14 +1142,15 @@ Public Class Form1
         AutoPainterShareLabel.Visible = False
         AutoPainterSharePercent.Visible = False
         AutoPainterShareSuffix.Visible = False
+        AutoArchitectModelLabel.Visible = False
+        AutoArchitectModelComboBox.Visible = False
+        AutoPainterModelLabel.Visible = False
+        AutoPainterModelComboBox.Visible = False
         If Not IsSpandrelSelected Then Return
 
         If PyModel.SelectedIndex < 0 OrElse PyModel.SelectedIndex >= SupportedSpandrelModels.Count Then
             SpandrelModelInfoLabel.Text = "No compatible model is selected. Refresh the scan or check your setup."
             UiToolTip.SetToolTip(SpandrelModelInfoLabel, "")
-            AutoPainterShareLabel.Visible = False
-            AutoPainterSharePercent.Visible = False
-            AutoPainterShareSuffix.Visible = False
             Return
         End If
 
@@ -1023,14 +1158,26 @@ Public Class Form1
         AutoPainterShareLabel.Visible = Model.IsAutoTextureRouter
         AutoPainterSharePercent.Visible = Model.IsAutoTextureRouter
         AutoPainterShareSuffix.Visible = Model.IsAutoTextureRouter
+        AutoArchitectModelLabel.Visible = Model.IsAutoTextureRouter
+        AutoArchitectModelComboBox.Visible = Model.IsAutoTextureRouter
+        AutoPainterModelLabel.Visible = Model.IsAutoTextureRouter
+        AutoPainterModelComboBox.Visible = Model.IsAutoTextureRouter
         If Model.IsAutoTextureRouter Then
             Dim PainterShareText As String = CInt(AutoPainterSharePercent.Value).ToString()
+            Dim ArchitectPath As String = GetSelectedAutoRouteModelPath(AutoArchitectModelComboBox)
+            Dim PainterPath As String = GetSelectedAutoRouteModelPath(AutoPainterModelComboBox)
+            If ArchitectPath = "" Then ArchitectPath = Model.ArchitectModelPath
+            If PainterPath = "" Then PainterPath = Model.PainterModelPath
             AutoPainterShareSuffix.Text = PainterShareText & "% max of detailed/repeating textures to Painter"
-            SpandrelModelInfoLabel.Text = "Experimental auto-routing: up to " & PainterShareText & "% Painter for detailed/repeating textures; the rest use Architect."
-            Dim RouterTooltip As String = "Feature-based routing (not semantic object recognition). Architect: " & Model.ArchitectModelPath &
-                Environment.NewLine & "Painter: " & Model.PainterModelPath
+            SpandrelModelInfoLabel.Text = "Auto Texture Routing: feature-based; up to " & PainterShareText & "% detailed/repeating textures go to Painter, the rest to Architect."
+            Dim RouterTooltip As String = "Feature-based routing (not semantic object recognition)." & Environment.NewLine &
+                "Architect — solid textures: " & ArchitectPath & Environment.NewLine &
+                "Painter — repeating textures: " & PainterPath & Environment.NewLine &
+                "Requires two different 4× RGB super-resolution models."
             UiToolTip.SetToolTip(SpandrelModelInfoLabel, RouterTooltip)
             UiToolTip.SetToolTip(PyModel, RouterTooltip)
+            UiToolTip.SetToolTip(AutoArchitectModelComboBox, ArchitectPath)
+            UiToolTip.SetToolTip(AutoPainterModelComboBox, PainterPath)
             Return
         End If
         If Model.Scale > 0 Then
@@ -1049,6 +1196,23 @@ Public Class Form1
             PyModel.SelectedIndex >= 0 AndAlso PyModel.SelectedIndex < SupportedSpandrelModels.Count Then
             LastSelectedSpandrelModelPath = SupportedSpandrelModels(PyModel.SelectedIndex).FilePath
         End If
+        UpdateSpandrelModelInfo()
+    End Sub
+
+    Private Sub AutoArchitectModelComboBox_SelectedIndexChanged(sender As Object, e As EventArgs) Handles AutoArchitectModelComboBox.SelectedIndexChanged
+        If IsUpdatingAutoRouteModelSelectors Then Return
+        Dim ArchitectPath As String = GetSelectedAutoRouteModelPath(AutoArchitectModelComboBox)
+        If ArchitectPath <> "" Then LastSelectedArchitectModelPath = ArchitectPath
+        ConfigurePainterRoleSelector(LastSelectedPainterModelPath)
+        UpdateAutoTextureRouterDefaultPaths()
+        UpdateSpandrelModelInfo()
+    End Sub
+
+    Private Sub AutoPainterModelComboBox_SelectedIndexChanged(sender As Object, e As EventArgs) Handles AutoPainterModelComboBox.SelectedIndexChanged
+        If IsUpdatingAutoRouteModelSelectors Then Return
+        Dim PainterPath As String = GetSelectedAutoRouteModelPath(AutoPainterModelComboBox)
+        If PainterPath <> "" Then LastSelectedPainterModelPath = PainterPath
+        UpdateAutoTextureRouterDefaultPaths()
         UpdateSpandrelModelInfo()
     End Sub
 
@@ -1079,11 +1243,22 @@ Public Class Form1
         If BackendName = SpandrelBackendName AndAlso PyModel.SelectedIndex >= 0 AndAlso PyModel.SelectedIndex < SupportedSpandrelModels.Count Then
             Dim Model As SpandrelModelInfo = SupportedSpandrelModels(PyModel.SelectedIndex)
             If Model.IsAutoTextureRouter Then
+                Dim ArchitectPath As String = GetSelectedAutoRouteModelPath(AutoArchitectModelComboBox)
+                Dim PainterPath As String = GetSelectedAutoRouteModelPath(AutoPainterModelComboBox)
+                If ArchitectPath = "" Then ArchitectPath = Model.ArchitectModelPath
+                If PainterPath = "" Then PainterPath = Model.PainterModelPath
+                If String.IsNullOrWhiteSpace(ArchitectPath) OrElse String.IsNullOrWhiteSpace(PainterPath) OrElse
+                    String.Equals(ArchitectPath, PainterPath, StringComparison.OrdinalIgnoreCase) Then
+                    Throw New InvalidOperationException("Auto Texture Routing needs two different compatible 4× RGB models.")
+                End If
+                LastSelectedArchitectModelPath = ArchitectPath
+                LastSelectedPainterModelPath = PainterPath
                 Return New FormSettings.PythonPackage(AutoTextureRouterToken, CInt(PyTileSize.Value), PyCPU.Checked, True, True,
-                    Model.ArchitectModelPath, Model.PainterModelPath, CInt(AutoPainterSharePercent.Value))
+                    ArchitectPath, PainterPath, CInt(AutoPainterSharePercent.Value))
             End If
         End If
-        Return New FormSettings.PythonPackage(GetSelectedUpscaleModel(), CInt(PyTileSize.Value), PyCPU.Checked, UseSpandrelFormats)
+        Return New FormSettings.PythonPackage(GetSelectedUpscaleModel(), CInt(PyTileSize.Value), PyCPU.Checked, UseSpandrelFormats,
+            False, LastSelectedArchitectModelPath, LastSelectedPainterModelPath, CInt(AutoPainterSharePercent.Value))
     End Function
 
     Sub MoveShowGroup(ByRef Source As GroupBox)
@@ -1727,9 +1902,11 @@ Public Class Form1
                 ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, "PBRify V4 DAT2 4x", ChainThumbs.Item(6)))
                 ChainList.Add(New FormSettings.ChainObject("PBRify V4 DAT2 4x", 6, "", DAT2BackendName, Me))
             Case SpandrelBackendName
-                Dim ModelDisplayName As String = "Spandrel - " & Path.GetFileName(GetSelectedUpscaleModel())
-                If GetSelectedPythonPackage().AutoRouteEnabled Then
-                    ModelDisplayName = "Spandrel - Auto Architect/Painter (" & CInt(AutoPainterSharePercent.Value).ToString() & "% Painter)"
+                Dim SelectedPackage As FormSettings.PythonPackage = GetSelectedPythonPackage()
+                Dim ModelDisplayName As String = "Spandrel - " & Path.GetFileName(SelectedPackage.Model)
+                If SelectedPackage.AutoRouteEnabled Then
+                    ModelDisplayName = "Spandrel - Auto (" & Path.GetFileName(SelectedPackage.ArchitectModel) & " / " &
+                        Path.GetFileName(SelectedPackage.PainterModel) & ", " & CInt(AutoPainterSharePercent.Value).ToString() & "% Painter)"
                 End If
                 ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, ModelDisplayName, ChainThumbs.Item(6)))
                 ChainList.Add(New FormSettings.ChainObject(ModelDisplayName, 6, "", SpandrelBackendName, Me))

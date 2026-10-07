@@ -32,17 +32,13 @@ For example, [4× GameAI 2.0](https://openmodeldb.info/models/4x-GameAI-2-0) is 
 
 ## Automatic Architect/Painter routing
 
-The optional [NPPE3 Super Resolution ensemble](https://huggingface.co/divyanshgitmax/NPPE3-SuperResolution-Ensemble) describes `best_realesrnet.pth` as **Architect** (geometric edges) and `best_swinir.pth` as **Painter** (detailed/repeating textures). To make AutoCrispy offer its experimental per-texture router, place both Spandrel-compatible 4× RGB checkpoints in the shared `models` folder, keeping those exact filenames:
+The optional [NPPE3 Super Resolution ensemble](https://huggingface.co/divyanshgitmax/NPPE3-SuperResolution-Ensemble) describes **Architect** as suited to geometric/solid textures and **Painter** as suited to detailed/repeating textures. AutoCrispy's experimental router is available when the scan finds at least two different Spandrel-compatible 4× RGB super-resolution checkpoints in the shared `models` folder. Their filenames do not matter.
 
-```text
-models/
-  best_realesrnet.pth
-  best_swinir.pth
-```
+After refreshing the model scan, explicitly select **Auto texture routing · Architect / Painter** in the Spandrel model list. The two role dropdowns appear: choose a model for **Architect — solid textures** and a different model for **Painter — repeating textures**. The role choices are saved with AutoCrispy settings. Ordinary checkpoint choices do not invoke either routing role. If an old route entry is already in the chain, remove it there and add the ordinary model; chain entries are snapshots of the settings used when they were added.
 
-After refreshing the model scan, select **Auto texture routing · Architect / Painter** in the Spandrel model list. The default routes **up to 30%** of sufficiently detailed textures to Painter and the rest to Architect; adjust the Painter share before adding the step to the chain. For a dump of 5,000 eligible textures, that means at most about 1,500 Painter selections. The router scores the whole pending batch, then processes the Architect group first and the Painter selections second, all in one run; you do not need to run the dump twice. Batches under 10 images use an absolute feature threshold instead of a percentage, avoiding arbitrary splits for one-off/watch-mode images.
+The default routes **up to 30%** of sufficiently detailed textures to Painter and the rest to Architect; adjust the Painter share before adding the step to the chain. For a dump of 5,000 eligible textures, that means at most about 1,500 Painter selections. The router scores the whole pending batch, then processes the Architect group first and the Painter selections second, all in one run; you do not need to run the dump twice. Batches under 10 images use an absolute feature threshold instead of a percentage, avoiding arbitrary splits for one-off/watch-mode images.
 
-This is an experimental image-statistics heuristic, not a trained semantic classifier: it considers fine detail, edge density/direction, local-pattern diversity, and repetition, but cannot reliably know that a texture depicts grass, skin, stone, or brick. It can route a texture differently than expected; enable debug logging to inspect the scores. Each image is processed by one model (the models' predictions are **not** blended), so this is not the 75/25 full-image ensemble described by the model card. The automatic choice appears only when both exact-name files are recognized by Spandrel as compatible 4× RGB models. Model weights are not included in AutoCrispy.
+This is an experimental image-statistics heuristic, not a trained semantic classifier: it considers fine detail, edge density/direction, local-pattern diversity, and repetition, but cannot reliably know that a texture depicts grass, skin, stone, or brick. It can route a texture differently than expected; enable debug logging to inspect the scores. Each image is processed by one model (the models' predictions are **not** blended), so this is not the 75/25 full-image ensemble described by the model card. The Auto Texture Routing choice appears only when at least two different 4× RGB super-resolution models are recognized by Spandrel; no hard-coded checkpoint names are required. The router still needs a distinct pair because both roles must produce compatible 4× outputs. Model weights are not included in AutoCrispy.
 
 ## 2. Install the inference runtime
 
@@ -59,7 +55,7 @@ Spandrel 0.4.2 detects RealPLKSR-DySample, DAT architectures, ESRGAN models, and
 ## 3. Use a Spandrel model
 
 1. Start AutoCrispy. The **Spandrel** backend appears when at least one eligible checkpoint is found in `models` (or the legacy `Spandrel` folder).
-2. Choose a model from the selector, then add it from the chain tab if needed. PLKSR V3 is selected by default when installed; otherwise DAT2 V4 is preferred, then the Architect/Painter router when its pair is available, then the first eligible model.
+2. Choose a model from the selector, then add it from the chain tab if needed. PLKSR V3 is selected by default when installed; otherwise DAT2 V4 is preferred, then the first regular eligible model. **Auto Texture Routing is never the default**; select it explicitly to enable Architect/Painter routing.
 3. Start the watcher as usual. The helper loads the selected checkpoint once per batch, then processes new textures.
 
 A saved chain entry using the exact legacy model `4x_gameai_2.0` is upgraded to PLKSR V3 when that checkpoint is recognized, or DAT2 V4 otherwise if recognized. If neither is installed, the saved ESRGAN entry is left unchanged; other ESRGAN chains are also left alone.

@@ -246,8 +246,8 @@ class SpandrelRunnerTests(unittest.TestCase):
             painter_file = input_folder / "z-painter.png"
             architect_file.touch()
             painter_file.touch()
-            architect_path = root / "best_realesrnet.pth"
-            painter_path = root / "best_swinir.pth"
+            architect_path = root / "solid-textures-model.pth"
+            painter_path = root / "repeating-textures-model.safetensors"
             architect = FakeImageDescriptor()
             painter = FakeImageDescriptor()
             args = types.SimpleNamespace(
@@ -285,6 +285,29 @@ class SpandrelRunnerTests(unittest.TestCase):
             self.assertIn("AUTOCRISPY_RESULT: 1/2 · Architect · a-architect.png · OK", log)
             self.assertIn("AUTOCRISPY_RESULT: 2/2 · Painter · z-painter.png · OK", log)
 
+    def test_single_checkpoint_cli_does_not_enable_auto_route(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            model_path = root / "4x-PBRify_UpscalerV4.pth"
+            with patch.object(
+                sys,
+                "argv",
+                [
+                    "spandrel_upscale.py",
+                    str(model_path),
+                    "--input",
+                    str(root / "input"),
+                    "--output",
+                    str(root / "output"),
+                    "--generic-model",
+                ],
+            ):
+                args = runner.parse_args()
+            self.assertFalse(args.auto_route)
+            self.assertEqual(args.model, model_path)
+            self.assertIsNone(args.architect_model)
+            self.assertIsNone(args.painter_model)
+
     def test_auto_route_cli_accepts_two_models_without_a_single_model_argument(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -295,9 +318,9 @@ class SpandrelRunnerTests(unittest.TestCase):
                     "spandrel_upscale.py",
                     "--auto-route",
                     "--architect-model",
-                    str(root / "best_realesrnet.pth"),
+                    str(root / "solid-surfaces.safetensors"),
                     "--painter-model",
-                    str(root / "best_swinir.pth"),
+                    str(root / "repeating-patterns.pth"),
                     "--input",
                     str(root / "input"),
                     "--output",
@@ -308,8 +331,8 @@ class SpandrelRunnerTests(unittest.TestCase):
             self.assertTrue(args.auto_route)
             self.assertIsNone(args.model)
             self.assertEqual(args.painter_share, 30)
-            self.assertEqual(args.architect_model.name, "best_realesrnet.pth")
-            self.assertEqual(args.painter_model.name, "best_swinir.pth")
+            self.assertEqual(args.architect_model.name, "solid-surfaces.safetensors")
+            self.assertEqual(args.painter_model.name, "repeating-patterns.pth")
 
     def test_auto_route_selection_caps_painter_share_and_uses_highest_texture_scores(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

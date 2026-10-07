@@ -96,6 +96,10 @@ Partial Class Form1
         Me.AutoPainterShareLabel = New System.Windows.Forms.Label()
         Me.AutoPainterSharePercent = New System.Windows.Forms.NumericUpDown()
         Me.AutoPainterShareSuffix = New System.Windows.Forms.Label()
+        Me.AutoArchitectModelLabel = New System.Windows.Forms.Label()
+        Me.AutoArchitectModelComboBox = New System.Windows.Forms.ComboBox()
+        Me.AutoPainterModelLabel = New System.Windows.Forms.Label()
+        Me.AutoPainterModelComboBox = New System.Windows.Forms.ComboBox()
         Me.WorkHorse = New System.ComponentModel.BackgroundWorker()
         Me.ChainGroup = New System.Windows.Forms.TabPage()
         Me.ChainPreview = New System.Windows.Forms.PictureBox()
@@ -853,6 +857,10 @@ Partial Class Form1
         '
         Me.PyGroup.Controls.Add(Me.PyCPU)
         Me.PyGroup.Controls.Add(Me.AutoPainterShareSuffix)
+        Me.PyGroup.Controls.Add(Me.AutoArchitectModelComboBox)
+        Me.PyGroup.Controls.Add(Me.AutoArchitectModelLabel)
+        Me.PyGroup.Controls.Add(Me.AutoPainterModelComboBox)
+        Me.PyGroup.Controls.Add(Me.AutoPainterModelLabel)
         Me.PyGroup.Controls.Add(Me.AutoPainterSharePercent)
         Me.PyGroup.Controls.Add(Me.AutoPainterShareLabel)
         Me.PyGroup.Controls.Add(Me.TileSizeHint)
@@ -904,6 +912,50 @@ Partial Class Form1
         Me.AutoPainterShareSuffix.TabIndex = 12
         Me.AutoPainterShareSuffix.Text = "30% max of detailed/repeating textures to Painter"
         Me.AutoPainterShareSuffix.Visible = False
+        '
+        'AutoArchitectModelLabel
+        '
+        Me.AutoArchitectModelLabel.AutoEllipsis = True
+        Me.AutoArchitectModelLabel.Location = New System.Drawing.Point(9, 227)
+        Me.AutoArchitectModelLabel.Name = "AutoArchitectModelLabel"
+        Me.AutoArchitectModelLabel.Size = New System.Drawing.Size(178, 24)
+        Me.AutoArchitectModelLabel.TabIndex = 13
+        Me.AutoArchitectModelLabel.Text = "Architect — solid textures:"
+        Me.AutoArchitectModelLabel.Visible = False
+        '
+        'AutoArchitectModelComboBox
+        '
+        Me.AutoArchitectModelComboBox.DisplayMember = "SelectorText"
+        Me.AutoArchitectModelComboBox.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList
+        Me.AutoArchitectModelComboBox.DropDownWidth = 520
+        Me.AutoArchitectModelComboBox.FormattingEnabled = True
+        Me.AutoArchitectModelComboBox.Location = New System.Drawing.Point(190, 222)
+        Me.AutoArchitectModelComboBox.Name = "AutoArchitectModelComboBox"
+        Me.AutoArchitectModelComboBox.Size = New System.Drawing.Size(389, 28)
+        Me.AutoArchitectModelComboBox.TabIndex = 14
+        Me.AutoArchitectModelComboBox.Visible = False
+        '
+        'AutoPainterModelLabel
+        '
+        Me.AutoPainterModelLabel.AutoEllipsis = True
+        Me.AutoPainterModelLabel.Location = New System.Drawing.Point(9, 263)
+        Me.AutoPainterModelLabel.Name = "AutoPainterModelLabel"
+        Me.AutoPainterModelLabel.Size = New System.Drawing.Size(178, 24)
+        Me.AutoPainterModelLabel.TabIndex = 15
+        Me.AutoPainterModelLabel.Text = "Painter — repeating textures:"
+        Me.AutoPainterModelLabel.Visible = False
+        '
+        'AutoPainterModelComboBox
+        '
+        Me.AutoPainterModelComboBox.DisplayMember = "SelectorText"
+        Me.AutoPainterModelComboBox.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList
+        Me.AutoPainterModelComboBox.DropDownWidth = 520
+        Me.AutoPainterModelComboBox.FormattingEnabled = True
+        Me.AutoPainterModelComboBox.Location = New System.Drawing.Point(190, 258)
+        Me.AutoPainterModelComboBox.Name = "AutoPainterModelComboBox"
+        Me.AutoPainterModelComboBox.Size = New System.Drawing.Size(389, 28)
+        Me.AutoPainterModelComboBox.TabIndex = 16
+        Me.AutoPainterModelComboBox.Visible = False
         '
         'PyCPU
         '
@@ -1751,6 +1803,10 @@ Partial Class Form1
     Friend WithEvents AutoPainterShareLabel As Label
     Friend WithEvents AutoPainterSharePercent As NumericUpDown
     Friend WithEvents AutoPainterShareSuffix As Label
+    Friend WithEvents AutoArchitectModelLabel As Label
+    Friend WithEvents AutoArchitectModelComboBox As ComboBox
+    Friend WithEvents AutoPainterModelLabel As Label
+    Friend WithEvents AutoPainterModelComboBox As ComboBox
     Friend WithEvents HotKeyCheckbox As CheckBox
     Friend WithEvents AlphaComboBox As ComboBox
 End Class

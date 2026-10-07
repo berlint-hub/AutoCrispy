@@ -50,6 +50,8 @@
         'Load ESRGAN Settings
         Source.PyTileSize.Value = LoadedSettings.PythonPak.TileSize
         Source.PyCPU.Checked = LoadedSettings.PythonPak.CPUOnly
+        Source.LoadSpandrelModelPreferences(LoadedSettings.PythonPak.Model,
+            LoadedSettings.PythonPak.ArchitectModel, LoadedSettings.PythonPak.PainterModel)
         Dim SavedPainterShare As Integer = LoadedSettings.PythonPak.PainterShare
         If SavedPainterShare < 10 OrElse SavedPainterShare > 90 Then SavedPainterShare = 30
         Source.AutoPainterSharePercent.Value = SavedPainterShare
