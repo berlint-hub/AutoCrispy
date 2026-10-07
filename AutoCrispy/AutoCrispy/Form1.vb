@@ -333,6 +333,40 @@ Public Class Form1
         Return New FormSettings.GamePathProfile(Profile.Name, Profile.InputPath, Profile.OutputPath, Profile.Enabled)
     End Function
 
+    Friend Shared Function DoGamePathsOverlap(InputPath As String, OutputPath As String) As Boolean
+        Dim NormalizedInputPath As String = NormalizeFolderPath(InputPath)
+        Dim NormalizedOutputPath As String = NormalizeFolderPath(OutputPath)
+        Return IsSameOrNestedFolder(NormalizedInputPath, NormalizedOutputPath) OrElse
+            IsSameOrNestedFolder(NormalizedOutputPath, NormalizedInputPath)
+    End Function
+
+    Private Shared Function NormalizeFolderPath(FolderPath As String) As String
+        Dim FullPath As String = Path.GetFullPath(FolderPath)
+        Dim RootPath As String = Path.GetPathRoot(FullPath)
+        If Not String.Equals(FullPath, RootPath, StringComparison.OrdinalIgnoreCase) Then
+            FullPath = FullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+        End If
+        Return FullPath
+    End Function
+
+    Private Shared Function IsSameOrNestedFolder(CandidatePath As String, ParentPath As String) As Boolean
+        If String.Equals(CandidatePath, ParentPath, StringComparison.OrdinalIgnoreCase) Then Return True
+        Dim ParentPrefix As String = ParentPath
+        If Not ParentPrefix.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal) AndAlso
+            Not ParentPrefix.EndsWith(Path.AltDirectorySeparatorChar.ToString(), StringComparison.Ordinal) Then
+            ParentPrefix &= Path.DirectorySeparatorChar
+        End If
+        Return CandidatePath.StartsWith(ParentPrefix, StringComparison.OrdinalIgnoreCase)
+    End Function
+
+    Private Shared Function GetInputFiles(InputPath As String, OutputPath As String) As String()
+        If DoGamePathsOverlap(InputPath, OutputPath) Then
+            Throw New InvalidOperationException(
+                "Game input and output folders must be separate and must not contain one another.")
+        End If
+        Return Directory.GetFiles(InputPath, "*.*", SearchOption.AllDirectories)
+    End Function
+
     Private Shared Function GetGamePathProfileName(InputPath As String) As String
         If String.IsNullOrWhiteSpace(InputPath) Then Return "Game"
         Dim TrimmedPath As String = InputPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
@@ -1062,6 +1096,12 @@ Public Class Form1
                        MsgBoxStyle.Critical, "Invalid game path")
                 Return
             End If
+            If DoGamePathsOverlap(Profile.InputPath, Profile.OutputPath) Then
+                MsgBox("Input and output folders must be separate and must not contain one another for game profile '" &
+                       Profile.Name & "'. Choose two non-overlapping folders to prevent recursive reprocessing.",
+                       MsgBoxStyle.Critical, "Overlapping game paths")
+                Return
+            End If
         Next
 
         WatchDog.Enabled = True
@@ -1750,7 +1790,7 @@ Public Class Form1
                     Result.MissingProfileCount += 1
                     Continue For
                 End If
-                Dim AllInputFiles As String() = Directory.GetFiles(Profile.InputPath, "*.*", SearchOption.AllDirectories)
+                Dim AllInputFiles As String() = GetInputFiles(Profile.InputPath, Profile.OutputPath)
                 If ScanToken.IsCancellationRequested Then Exit For
                 Dim UnsupportedCount As Integer = 0
                 Dim AlphaFilteredCount As Integer = 0
@@ -1839,7 +1879,7 @@ Public Class Form1
             If ScanToken.IsCancellationRequested Then Exit For
             Try
                 If Not Directory.Exists(Profile.InputPath) OrElse Not Directory.Exists(Profile.OutputPath) Then Continue For
-                Dim AllInputFiles As String() = Directory.GetFiles(Profile.InputPath, "*.*", SearchOption.AllDirectories)
+                Dim AllInputFiles As String() = GetInputFiles(Profile.InputPath, Profile.OutputPath)
                 If ScanToken.IsCancellationRequested Then Exit For
                 Dim ProfileUnsupportedCount As Integer = 0
                 Dim ProfileAlphaFilteredCount As Integer = 0
@@ -1962,7 +2002,7 @@ Public Class Form1
         Dim TempPath As String = GetChainPath("Temp", 0)
         Dim ThreadCount As Integer = GetThreads(LoadedSettings.BasicSettings.ThreadIndex, LoadedSettings.BasicSettings.ThreadCount)
         If ThreadCount < 1 Then ThreadCount = 1
-        Dim AllInputFiles As String() = Directory.GetFiles(LoadedSettings.Paths.InputPath, "*.*", SearchOption.AllDirectories)
+        Dim AllInputFiles As String() = GetInputFiles(LoadedSettings.Paths.InputPath, LoadedSettings.Paths.OutputPath)
         Dim UnsupportedCount As Integer = 0
         Dim AlphaFilteredCount As Integer = 0
         Dim SupportedCount As Integer = 0
@@ -3637,6 +3677,13 @@ Friend NotInheritable Class GamePathProfileEditorDialog
         End If
         If Not Directory.Exists(OutputPath) Then
             MessageBox.Show(Me, "Choose an existing output folder.", "Invalid output folder", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+            _outputPathBox.Focus()
+            Return
+        End If
+        If Form1.DoGamePathsOverlap(InputPath, OutputPath) Then
+            MessageBox.Show(Me,
+                "Input and output folders must be separate and must not contain one another. This prevents AutoCrispy from rediscovering generated textures.",
+                "Overlapping game folders", MessageBoxButtons.OK, MessageBoxIcon.Warning)
             _outputPathBox.Focus()
             Return
         End If

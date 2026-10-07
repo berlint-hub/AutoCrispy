@@ -58,7 +58,7 @@ Spandrel 0.4.2 detects RealPLKSR-DySample, DAT architectures, ESRGAN models, and
 
 1. Start AutoCrispy. The **Spandrel** backend appears when at least one eligible checkpoint is found in `models` (or the legacy `Spandrel` folder).
 2. Choose a model from the selector, then add it from the chain tab if needed. PLKSR V3 is selected by default when installed; otherwise DAT2 V4 is preferred, then the first regular eligible model. **Auto Texture Routing is never the default**; select it explicitly to enable Architect/Painter routing.
-3. Start the watcher as usual. The helper loads the selected checkpoint once per batch, then processes new textures. It reports per-image progress; if you run the Python helper directly, its output folder may be nested under the input folder—the nested output tree is excluded from discovery. The input and output folders themselves must not be the same.
+3. Start the watcher as usual. The helper loads the selected checkpoint once per batch, then processes new textures. It reports per-image progress; if you run the Python helper directly, its output folder may be nested under the input folder—the nested output tree is excluded from discovery. The Python helper rejects identical input/output folders. For the GUI watcher, keep the input and output folder trees entirely separate (neither may contain the other), so output discovery and completion tracking remain unambiguous.
 
 A saved chain entry using the exact legacy model `4x_gameai_2.0` is upgraded to PLKSR V3 when that checkpoint is recognized, or DAT2 V4 otherwise if recognized. If neither is installed, the saved ESRGAN entry is left unchanged; other ESRGAN chains are also left alone.
 
