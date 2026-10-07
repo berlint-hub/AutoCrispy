@@ -1303,7 +1303,7 @@ Public Class Form1
         Try
             Dim PreviewItems As List(Of AutoRoutePreviewItem) = Await Task.Run(
                 Function() RunAutoRoutePreview(PythonExecutable, RunnerPath, PreviewFolder, Package, PreviewDebugEnabled))
-            Dim PainterCount As Integer = PreviewItems.Count(Function(Item) String.Equals(Item.Role, "Painter", StringComparison.OrdinalIgnoreCase))
+            Dim PainterCount As Integer = PreviewItems.Where(Function(Item) String.Equals(Item.Role, "Painter", StringComparison.OrdinalIgnoreCase)).Count()
             AutoRoutePreviewStatusLabel.Text = "Preview: " & PainterCount.ToString() & " Painter · " & (PreviewItems.Count - PainterCount).ToString() & " Architect"
             AutoRoutePreviewHasResult = True
             Using PreviewDialog As New AutoRoutePreviewDialog(PreviewItems, PreviewFolder,

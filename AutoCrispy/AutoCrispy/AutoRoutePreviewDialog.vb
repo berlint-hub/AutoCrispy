@@ -42,14 +42,8 @@ Friend NotInheritable Class AutoRoutePreviewDialog
         MinimumSize = New Size(850, 560)
         ShowInTaskbar = False
 
-        Dim PainterItems As List(Of AutoRoutePreviewItem) = _items.
-            Where(Function(Item) String.Equals(Item.Role, "Painter", StringComparison.OrdinalIgnoreCase)).
-            OrderByDescending(Function(Item) Item.Score).
-            ThenBy(Function(Item) Item.FilePath, StringComparer.OrdinalIgnoreCase).ToList()
-        Dim ArchitectItems As List(Of AutoRoutePreviewItem) = _items.
-            Where(Function(Item) String.Equals(Item.Role, "Architect", StringComparison.OrdinalIgnoreCase)).
-            OrderByDescending(Function(Item) Item.Score).
-            ThenBy(Function(Item) Item.FilePath, StringComparer.OrdinalIgnoreCase).ToList()
+        Dim PainterItems As List(Of AutoRoutePreviewItem) = _items.Where(Function(Item) String.Equals(Item.Role, "Painter", StringComparison.OrdinalIgnoreCase)).OrderByDescending(Function(Item) Item.Score).ThenBy(Function(Item) Item.FilePath, StringComparer.OrdinalIgnoreCase).ToList()
+        Dim ArchitectItems As List(Of AutoRoutePreviewItem) = _items.Where(Function(Item) String.Equals(Item.Role, "Architect", StringComparison.OrdinalIgnoreCase)).OrderByDescending(Function(Item) Item.Score).ThenBy(Function(Item) Item.FilePath, StringComparer.OrdinalIgnoreCase).ToList()
 
         Dim PainterModelName As String = If(String.IsNullOrWhiteSpace(PainterModel), "(not selected)", Path.GetFileName(PainterModel))
         Dim ArchitectModelName As String = If(String.IsNullOrWhiteSpace(ArchitectModel), "(not selected)", Path.GetFileName(ArchitectModel))
