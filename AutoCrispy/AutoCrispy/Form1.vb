@@ -22,6 +22,7 @@ Public Class Form1
     Private IsUpdatingAutoRouteModelSelectors As Boolean = False
     Private AutoRoutePreviewHasResult As Boolean = False
     Private ReadOnly UiToolTip As New ToolTip()
+    Private ReadOnly SpandrelTilingBadge As New System.Windows.Forms.Label()
     Private ReadOnly GamePathProfiles As New BindingList(Of FormSettings.GamePathProfile)
     Private CurrentRunGamePaths As List(Of FormSettings.GamePathProfile)
     Private CurrentRunTempRoot As String = String.Empty
@@ -197,6 +198,7 @@ Public Class Form1
 
     Private Async Sub Form1_Load(sender As Object, e As EventArgs) Handles MyBase.Load
         Me.SetStyle(ControlStyles.OptimizedDoubleBuffer, True)
+        InitializeSpandrelModelCard()
         Application.CurrentCulture = New Globalization.CultureInfo("EN-US")
         PreloadImageList()
         ChainControl = New DragDropList(ChainPreview, 7)
@@ -1322,6 +1324,66 @@ Public Class Form1
         Next
     End Sub
 
+    Private Sub InitializeSpandrelModelCard()
+        SpandrelTilingBadge.Name = "SpandrelTilingBadge"
+        SpandrelTilingBadge.AccessibleName = "Model tiling policy"
+        SpandrelTilingBadge.AutoEllipsis = True
+        SpandrelTilingBadge.BorderStyle = BorderStyle.FixedSingle
+        SpandrelTilingBadge.Cursor = Cursors.Help
+        SpandrelTilingBadge.Font = New System.Drawing.Font("Segoe UI", 8.25!, FontStyle.Bold)
+        SpandrelTilingBadge.Padding = New Padding(4, 0, 4, 0)
+        SpandrelTilingBadge.TextAlign = ContentAlignment.MiddleCenter
+        SpandrelTilingBadge.Visible = False
+        PyGroup.Controls.Add(SpandrelTilingBadge)
+        SpandrelTilingBadge.BringToFront()
+
+        SpandrelModelInfoLabel.BorderStyle = BorderStyle.FixedSingle
+        SpandrelModelInfoLabel.BackColor = System.Drawing.Color.FromArgb(245, 247, 250)
+        SpandrelModelInfoLabel.Padding = New Padding(6, 0, 6, 0)
+        SpandrelModelInfoLabel.TextAlign = ContentAlignment.MiddleLeft
+        LayoutSpandrelModelCard(False)
+        UiToolTip.SetToolTip(Label25, "Maximum input tile edge in pixels. Set to 0 to try a full image first.")
+    End Sub
+
+    Private Sub LayoutSpandrelModelCard(ShowTilingBadge As Boolean)
+        Dim LeftInset As Integer = SpandrelModelInfoLabel.Left
+        Dim RightInset As Integer = LeftInset + 6
+        Dim AvailableWidth As Integer = Math.Max(100, PyGroup.ClientSize.Width - LeftInset - RightInset)
+        SpandrelTilingBadge.Visible = ShowTilingBadge
+        If ShowTilingBadge Then
+            Dim BadgeWidth As Integer = Math.Min(220, Math.Max(175, CInt(AvailableWidth * 0.34)))
+            SpandrelModelInfoLabel.Width = Math.Max(180, AvailableWidth - BadgeWidth - 8)
+            SpandrelTilingBadge.Location = New Point(
+                SpandrelModelInfoLabel.Right + 8,
+                SpandrelModelInfoLabel.Top + (SpandrelModelInfoLabel.Height - Math.Max(20, SpandrelModelInfoLabel.Height - 10)) \ 2
+            )
+            SpandrelTilingBadge.Size = New Size(BadgeWidth, Math.Max(20, SpandrelModelInfoLabel.Height - 10))
+        Else
+            SpandrelModelInfoLabel.Width = AvailableWidth
+        End If
+    End Sub
+
+    Private Sub SetSpandrelTilingBadge(Text As String, Background As System.Drawing.Color,
+                                       Foreground As System.Drawing.Color, Description As String)
+        SpandrelTilingBadge.Text = Text
+        SpandrelTilingBadge.BackColor = Background
+        SpandrelTilingBadge.ForeColor = Foreground
+        SpandrelTilingBadge.AccessibleDescription = Description
+        UiToolTip.SetToolTip(SpandrelTilingBadge, Description)
+    End Sub
+
+    Private Function GetSpandrelTilingModeForModelPath(ModelPath As String) As String
+        If String.IsNullOrWhiteSpace(ModelPath) Then Return "unknown"
+        For Each Candidate As SpandrelModelInfo In SupportedSpandrelModels
+            If Not Candidate.IsAutoTextureRouter AndAlso
+                String.Equals(Candidate.FilePath, ModelPath, StringComparison.OrdinalIgnoreCase) Then
+                Dim Mode As String = If(Candidate.Tiling, "unknown").Trim()
+                Return If(Mode = "", "unknown", Mode.ToLowerInvariant())
+            End If
+        Next
+        Return "unknown"
+    End Function
+
     Private Sub UpdateSpandrelModelInfo()
         Dim BackendName As String = If(ExeComboBox.SelectedItem, "").ToString()
         Dim IsSpandrelSelected As Boolean = String.Equals(BackendName, SpandrelBackendName, StringComparison.OrdinalIgnoreCase)
@@ -1332,8 +1394,12 @@ Public Class Form1
         UiToolTip.SetToolTip(PyPrecisionComboBox,
             "Auto uses FP16 only when a CUDA model advertises support. FP16 requires CUDA; FP32 disables TF32 for full CUDA precision.")
         SpandrelModelInfoLabel.Visible = IsSpandrelSelected
+        LayoutSpandrelModelCard(IsSpandrelSelected)
         SpandrelScanStatusLabel.Visible = IsSpandrelSelected
         RefreshSpandrelModelsButton.Visible = IsSpandrelSelected
+        PyTileSize.Enabled = True
+        Label25.Enabled = True
+        TileSizeHint.ForeColor = System.Drawing.SystemColors.GrayText
         AutoPainterShareLabel.Visible = False
         AutoPainterSharePercent.Visible = False
         AutoPainterShareSuffix.Visible = False
@@ -1348,11 +1414,22 @@ Public Class Form1
         AutoArchitectModelComboBox.Visible = False
         AutoPainterModelLabel.Visible = False
         AutoPainterModelComboBox.Visible = False
-        If Not IsSpandrelSelected Then Return
+        If Not IsSpandrelSelected Then
+            UiToolTip.SetToolTip(PyTileSize, TileSizeHint.Text)
+            Return
+        End If
 
         If PyModel.SelectedIndex < 0 OrElse PyModel.SelectedIndex >= SupportedSpandrelModels.Count Then
-            SpandrelModelInfoLabel.Text = "No compatible model is selected. Refresh the scan or check your setup."
+            SpandrelModelInfoLabel.Text = "No compatible model selected."
+            SetSpandrelTilingBadge(
+                "NO MODEL",
+                System.Drawing.Color.FromArgb(238, 241, 245),
+                System.Drawing.Color.FromArgb(92, 102, 114),
+                "Choose a recognized Spandrel model to see its tiling policy."
+            )
+            TileSizeHint.Text = "Select a compatible model to see its tile and memory behavior."
             UiToolTip.SetToolTip(SpandrelModelInfoLabel, "")
+            UiToolTip.SetToolTip(PyTileSize, "Select a model to see whether it uses external tiles.")
             Return
         End If
 
@@ -1378,21 +1455,33 @@ Public Class Form1
             Dim PainterPath As String = GetSelectedAutoRouteModelPath(AutoPainterModelComboBox)
             If ArchitectPath = "" Then ArchitectPath = Model.ArchitectModelPath
             If PainterPath = "" Then PainterPath = Model.PainterModelPath
+            Dim ArchitectTiling As String = GetSpandrelTilingModeForModelPath(ArchitectPath)
+            Dim PainterTiling As String = GetSpandrelTilingModeForModelPath(PainterPath)
+            Dim TilingDescription As String = "Architect: " & ArchitectTiling.ToUpperInvariant() &
+                " · Painter: " & PainterTiling.ToUpperInvariant() &
+                ". INTERNAL models bypass external tiling and OOM tile retries."
+            SetSpandrelTilingBadge(
+                "POLICY PER MODEL",
+                System.Drawing.Color.FromArgb(232, 240, 254),
+                System.Drawing.Color.FromArgb(31, 78, 121),
+                TilingDescription
+            )
+            TileSizeHint.Text = "Architect and Painter apply their own model's tiling policy."
+            TileSizeHint.ForeColor = System.Drawing.Color.FromArgb(75, 91, 109)
             AutoPainterShareSuffix.Text = "strict cap (floored)"
             AutoPainterThresholdSuffix.Text = "below uses Architect"
-            SpandrelModelInfoLabel.Text = "Auto Texture Routing: feature-based; at most " & PainterShareText &
-                "% to Painter (floored to whole textures); scores below " & PainterThresholdText & " use Architect."
+            SpandrelModelInfoLabel.Text = "Auto routing · " & PainterShareText & "% Painter cap · min score " & PainterThresholdText
             Dim RouterTooltip As String = "Feature-based routing (not semantic object recognition)." & Environment.NewLine &
                 "The Painter cap applies to every batch: max Painter count = floor(texture count × share / 100)." & Environment.NewLine &
                 "For example, a 30% cap on two textures allows zero Painter assignments. Eligible textures beyond the cap use Architect." & Environment.NewLine &
                 "Minimum Painter score: " & PainterThresholdText & Environment.NewLine &
-                "Architect model: " & ArchitectPath & Environment.NewLine &
-                "Painter model: " & PainterPath & Environment.NewLine &
-                "Requires two different 4× RGB super-resolution models."
+                "Architect model: " & ArchitectPath & " (tiling: " & ArchitectTiling & ")" & Environment.NewLine &
+                "Painter model: " & PainterPath & " (tiling: " & PainterTiling & ")" & Environment.NewLine &
+                "INTERNAL models bypass external tiles and OOM tile retries. Requires two different 4× RGB super-resolution models."
             UiToolTip.SetToolTip(SpandrelModelInfoLabel, RouterTooltip)
             UiToolTip.SetToolTip(PyModel, RouterTooltip)
-            UiToolTip.SetToolTip(AutoArchitectModelComboBox, ArchitectPath)
-            UiToolTip.SetToolTip(AutoPainterModelComboBox, PainterPath)
+            UiToolTip.SetToolTip(AutoArchitectModelComboBox, ArchitectPath & Environment.NewLine & "Tiling: " & ArchitectTiling)
+            UiToolTip.SetToolTip(AutoPainterModelComboBox, PainterPath & Environment.NewLine & "Tiling: " & PainterTiling)
             UiToolTip.SetToolTip(AutoPainterSharePercent, "Strict maximum Painter share for every batch. The allowed count is floored to a whole number of textures; small batches can therefore allow zero Painter images.")
             UiToolTip.SetToolTip(AutoPainterThresholdLabel, "Textures below this feature score are assigned to Architect. This is a feature heuristic, not semantic classification.")
             UiToolTip.SetToolTip(AutoPainterThreshold, "Minimum feature score for Painter eligibility (0.05–1.00). Lower values make more textures eligible.")
@@ -1400,30 +1489,64 @@ Public Class Form1
             UiToolTip.SetToolTip(AutoRoutePreviewSampleCount, "Number of supported textures to sample for a quick read-only route preview.")
             Return
         End If
-        Dim TilingSummary As String = ""
-        Dim TilingTooltip As String = ""
-        Select Case If(Model.Tiling, "").Trim().ToUpperInvariant()
+        Dim TilingMode As String = If(Model.Tiling, "unknown").Trim().ToUpperInvariant()
+        If TilingMode = "" Then TilingMode = "UNKNOWN"
+        Dim TilingTooltip As String = "Spandrel tiling metadata: " & TilingMode & "."
+        Select Case TilingMode
             Case "INTERNAL"
-                TilingSummary = " · model tiles internally"
-                TilingTooltip = "Spandrel marks this model as internally tiled. AutoCrispy will bypass external tiles and OOM tile retries."
+                TilingTooltip &= " The model handles its own tiling; AutoCrispy external tiles and OOM tile retries are disabled."
+                SetSpandrelTilingBadge(
+                    "INTERNAL TILING",
+                    System.Drawing.Color.FromArgb(227, 239, 255),
+                    System.Drawing.Color.FromArgb(31, 78, 121),
+                    TilingTooltip
+                )
+                TileSizeHint.Text = "Model tiles internally · external tile size and OOM retries are ignored."
+                TileSizeHint.ForeColor = System.Drawing.Color.FromArgb(31, 78, 121)
+                PyTileSize.Enabled = False
+                Label25.Enabled = False
+                UiToolTip.SetToolTip(PyTileSize, TilingTooltip)
             Case "DISCOURAGED"
-                TilingSummary = " · external tiling not recommended"
-                TilingTooltip = "Spandrel discourages external tiling because it may cause artifacts. AutoCrispy keeps its configured tile size and OOM fallback."
+                TilingTooltip &= " External tiling may cause artifacts; AutoCrispy keeps its configured tile size and OOM fallback."
+                SetSpandrelTilingBadge(
+                    "TILING NOT ADVISED",
+                    System.Drawing.Color.FromArgb(255, 244, 214),
+                    System.Drawing.Color.FromArgb(133, 83, 0),
+                    TilingTooltip
+                )
+                TileSizeHint.Text = "Tiling may cause artifacts · external tiling remains available."
+                TileSizeHint.ForeColor = System.Drawing.Color.FromArgb(133, 83, 0)
+                UiToolTip.SetToolTip(PyTileSize, TilingTooltip)
             Case "SUPPORTED"
-                TilingSummary = " · external tiling supported"
-                TilingTooltip = "Spandrel marks external tiling as supported."
+                TilingTooltip &= " AutoCrispy uses the selected tile size and retries smaller tiles after GPU OOM."
+                SetSpandrelTilingBadge(
+                    "EXTERNAL TILING OK",
+                    System.Drawing.Color.FromArgb(226, 244, 232),
+                    System.Drawing.Color.FromArgb(35, 105, 65),
+                    TilingTooltip
+                )
+                TileSizeHint.Text = "Tiling supported · smaller tiles are retried after GPU memory errors."
+                TileSizeHint.ForeColor = System.Drawing.Color.FromArgb(57, 95, 73)
+                UiToolTip.SetToolTip(PyTileSize, TilingTooltip)
             Case Else
-                TilingTooltip = "Spandrel did not report a tiling recommendation."
+                TilingTooltip &= " AutoCrispy uses its normal external tile and OOM fallback behavior."
+                SetSpandrelTilingBadge(
+                    "TILING POLICY UNKNOWN",
+                    System.Drawing.Color.FromArgb(238, 241, 245),
+                    System.Drawing.Color.FromArgb(92, 102, 114),
+                    TilingTooltip
+                )
+                TileSizeHint.Text = "Unknown policy · AutoCrispy uses its normal tile and OOM fallback."
+                TileSizeHint.ForeColor = System.Drawing.SystemColors.GrayText
+                UiToolTip.SetToolTip(PyTileSize, TilingTooltip)
         End Select
         If Model.Scale > 0 Then
-            Dim ScaleDescription As String = If(Model.Scale = 1, "preserves image dimensions", "enlarges " & Model.Scale.ToString() & "×")
-            SpandrelModelInfoLabel.Text = "Architecture: " & Model.Architecture & " · " & Model.Scale.ToString() & "× " & Model.Purpose &
-                " · RGB " & Model.InputChannels.ToString() & "→" & Model.OutputChannels.ToString() & " · " & ScaleDescription & TilingSummary
+            SpandrelModelInfoLabel.Text = Model.Scale.ToString() & "× " & Model.Purpose & " · RGB " &
+                Model.InputChannels.ToString() & "→" & Model.OutputChannels.ToString() & " · " & Model.Architecture
         Else
-            SpandrelModelInfoLabel.Text = "Architecture: " & Model.Architecture & " · Spandrel-compatible image model" & TilingSummary
+            SpandrelModelInfoLabel.Text = "Spandrel-compatible · " & Model.Architecture
         End If
-        Dim ModelToolTip As String = Model.FilePath
-        If TilingTooltip <> "" Then ModelToolTip &= Environment.NewLine & TilingTooltip
+        Dim ModelToolTip As String = Model.FilePath & Environment.NewLine & TilingTooltip
         UiToolTip.SetToolTip(SpandrelModelInfoLabel, ModelToolTip)
         UiToolTip.SetToolTip(PyModel, ModelToolTip)
     End Sub
