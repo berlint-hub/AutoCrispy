@@ -897,6 +897,7 @@ Public Class Form1
                 ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainControl.ListItems.Count, ChainItem.Name, ChainThumbs.Item(ChainItem.IconIndex)))
             Next
             ChainControl.DrawList(ChainControl.ListItems)
+            UpdateChainAddButtonState()
         End If
     End Sub
 
@@ -979,12 +980,34 @@ Public Class Form1
                 Next
                 If GetPreferredSpandrelBackendIndex() >= 0 Then ReplaceLegacyUpscalerChain()
                 ChainControl.DrawList(ChainControl.ListItems)
+                UpdateChainAddButtonState()
             End If
         End Using
     End Sub
 
+    Private Function FindLatestSpandrelChainItemIndex() As Integer
+        If ChainList Is Nothing Then Return -1
+        For i As Integer = ChainList.Count - 1 To 0 Step -1
+            If String.Equals(ChainList(i).PackageType, SpandrelBackendName, StringComparison.OrdinalIgnoreCase) Then Return i
+        Next
+        Return -1
+    End Function
+
+    Private Sub UpdateChainAddButtonState()
+        Dim IsSpandrelSelected As Boolean = String.Equals(If(ExeComboBox.SelectedItem, "").ToString(), SpandrelBackendName, StringComparison.OrdinalIgnoreCase)
+        If IsSpandrelSelected AndAlso FindLatestSpandrelChainItemIndex() >= 0 Then
+            ChainAdd.Text = "Update"
+            UiToolTip.SetToolTip(ChainAdd, "Update the latest Spandrel chain step with the selected model and settings. Shift-click to append another Spandrel step.")
+        Else
+            ChainAdd.Text = "Add"
+            UiToolTip.SetToolTip(ChainAdd, "Add the selected backend as a new step in the chain.")
+        End If
+    End Sub
+
     Private Sub ChainAdd_Click(sender As Object, e As EventArgs) Handles ChainAdd.Click
-        AddModelToChain(ExeComboBox.SelectedItem)
+        Dim ForceAppend As Boolean = (Control.ModifierKeys And Keys.Shift) = Keys.Shift
+        AddModelToChain(ExeComboBox.SelectedItem, ForceAppend)
+        UpdateChainAddButtonState()
     End Sub
 
     Private Sub RemoveItemFromChain(sender As Object, e As EventArgs) Handles ChainContextDelete.Click
@@ -993,6 +1016,7 @@ Public Class Form1
         ChainControl.ListItems.RemoveAt(Remove)
         ChainControl.ReorderList()
         ChainControl.DrawList(ChainControl.ListItems)
+        UpdateChainAddButtonState()
     End Sub
 
     Private Sub ChainContextEdit_Click(sender As Object, e As EventArgs) Handles ChainContextEdit.Click
@@ -1007,6 +1031,7 @@ Public Class Form1
                 End Try
             End If
         End Using
+        UpdateChainAddButtonState()
     End Sub
 
     Private Sub ChainPreview_MouseUp(sender As Object, e As MouseEventArgs) Handles ChainPreview.MouseUp
@@ -1209,6 +1234,7 @@ Public Class Form1
                 MoveShowGroup(PyGroup)
         End Select
         UpdateSpandrelModelInfo()
+        UpdateChainAddButtonState()
     End Sub
 
     Public Sub LoadSpandrelModelPreferences(ModelPath As String, ArchitectPath As String, PainterPath As String)
@@ -3053,7 +3079,7 @@ Public Class Form1
         Return ""
     End Function
 
-    Private Sub AddModelToChain(Mode As String, Optional AddPreview As Boolean = True)
+    Private Sub AddModelToChain(Mode As String, Optional ForceAppend As Boolean = False)
         Select Case Mode
             Case "Waifu2x Caffe"
                 ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, "Caffe", ChainThumbs.Item(0)))
@@ -3098,8 +3124,22 @@ Public Class Form1
                     ModelDisplayName = "Spandrel - Auto (" & Path.GetFileName(SelectedPackage.ArchitectModel) & " / " &
                         Path.GetFileName(SelectedPackage.PainterModel) & ", " & CInt(AutoPainterSharePercent.Value).ToString() & "% Painter)"
                 End If
-                ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, ModelDisplayName, ChainThumbs.Item(6)))
-                ChainList.Add(New FormSettings.ChainObject(ModelDisplayName, 6, "", SpandrelBackendName, Me))
+                Dim UpdatedChainItem As New FormSettings.ChainObject(ModelDisplayName, 6, "", SpandrelBackendName, Me)
+                Dim ExistingSpandrelIndex As Integer = If(ForceAppend, -1, FindLatestSpandrelChainItemIndex())
+                If ExistingSpandrelIndex >= 0 Then
+                    ChainList(ExistingSpandrelIndex) = UpdatedChainItem
+                    If ExistingSpandrelIndex < ChainControl.ListItems.Count AndAlso ChainControl.ListItems.Count = ChainList.Count Then
+                        ChainControl.ListItems(ExistingSpandrelIndex) = New DragDropList.DragDropItem(ExistingSpandrelIndex, ModelDisplayName, ChainThumbs.Item(6))
+                    Else
+                        ChainControl.ListItems.Clear()
+                        For i As Integer = 0 To ChainList.Count - 1
+                            ChainControl.ListItems.Add(New DragDropList.DragDropItem(i, ChainList(i).Name, ChainThumbs.Item(ChainList(i).IconIndex)))
+                        Next
+                    End If
+                Else
+                    ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, ModelDisplayName, ChainThumbs.Item(6)))
+                    ChainList.Add(UpdatedChainItem)
+                End If
         End Select
         ChainControl.DrawList(ChainControl.ListItems)
     End Sub
