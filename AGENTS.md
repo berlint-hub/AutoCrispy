@@ -6,7 +6,7 @@ _Last updated: 2026-10-07 (Europe/Prague). Read this before continuing repositor
 
 - Repository: `berlint-hub/AutoCrispy`
 - Arena work must stay on `arena/1924e580-autocrispy`; do not switch to, create, or push another branch, and never push these changes to `master`.
-- Latest remote branch commit before the current route-preview work: `310f327` — **Add persistent development handoff notes**. Its Windows Actions run passed: [37647841309](https://github.com/berlint-hub/AutoCrispy/actions/runs/37647841309).
+- The route-preview/tuning implementation is on `8865f25` (`Fix route preview Painter count compilation`); Windows Actions passed: [37652638723](https://github.com/berlint-hub/AutoCrispy/actions/runs/37652638723). The previous handoff-note base was `310f327`.
 - The user has authorized pushing their changes to this Arena branch to trigger GitHub Actions. Do not create an issue for an audit; if offering code upstream, ask the maintainer whether they want to use it.
 
 ## Completed work
@@ -41,7 +41,7 @@ _Last updated: 2026-10-07 (Europe/Prague). Read this before continuing repositor
 
 ## Verification already completed
 
-- For the current route-preview/tuning work, `python -m unittest discover -s AutoCrispy/AutoCrispy/tests -v`: **16 tests passed**; Python `py_compile` passed for the runner and tests. Windows Actions for these new UI changes are still pending.
+- For the route-preview/tuning work, `python -m unittest discover -s AutoCrispy/AutoCrispy/tests -v`: **16 tests passed**; Python `py_compile` passed for the runner and tests. The Windows build and runner tests passed for `8865f25`: [run 37652638723](https://github.com/berlint-hub/AutoCrispy/actions/runs/37652638723).
 - The prior configurable-routing commit passed 13 Python tests and its Windows build; see the action link below.
 - GitHub Actions Windows build and runner tests passed for `6ee05abc`: [run 37645474245](https://github.com/berlint-hub/AutoCrispy/actions/runs/37645474245).
 - The prior path-profile commit `279e2a3` also passed Actions: [run 37639182091](https://github.com/berlint-hub/AutoCrispy/actions/runs/37639182091).
