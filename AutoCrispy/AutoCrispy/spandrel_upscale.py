@@ -71,6 +71,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Analyze input textures and report route assignments without upscaling",
     )
+    parser.add_argument(
+        "--preview-limit",
+        type=int,
+        default=0,
+        help="Maximum number of sorted input images to analyze for a preview (0 means all)",
+    )
     parser.add_argument("--architect-model", type=Path, help="4x Architect checkpoint for auto routing")
     parser.add_argument("--painter-model", type=Path, help="4x Painter checkpoint for auto routing")
     parser.add_argument(
@@ -116,6 +122,8 @@ def parse_args() -> argparse.Namespace:
             parser.error("--painter-share must be between 0 and 100")
         if not 0 <= args.painter_threshold <= 1:
             parser.error("--painter-threshold must be between 0 and 1")
+        if args.preview_limit < 0:
+            parser.error("--preview-limit must be 0 or greater")
     elif args.list_models is None:
         if args.input is None or args.output is None:
             parser.error("--input and --output are required unless --list-models or --preview-route is used")
@@ -522,11 +530,15 @@ def _select_painter_files(
 def _preview_auto_route(args: argparse.Namespace) -> int:
     if not args.input.is_dir():
         raise NotADirectoryError(f"Input folder not found: {args.input}")
-    files = sorted(
+    available_files = sorted(
         path
         for path in args.input.iterdir()
         if path.is_file() and path.suffix.casefold() in SUPPORTED_EXTENSIONS
     )
+    preview_limit = getattr(args, "preview_limit", 0)
+    if preview_limit < 0:
+        raise ValueError("Preview sample size must be 0 or greater.")
+    files = available_files[:preview_limit] if preview_limit else available_files
     scored_files: list[tuple[Path, dict[str, float]]] = []
     report_interval = max(1, len(files) // 100)
     for index, input_path in enumerate(files, start=1):
@@ -541,10 +553,16 @@ def _preview_auto_route(args: argparse.Namespace) -> int:
         scored_files, args.painter_share, args.painter_threshold
     )
     architect_count = len(files) - len(painter_files)
+    sample_description = (
+        f"all {len(available_files)}"
+        if preview_limit == 0
+        else f"first {len(files)} of {len(available_files)}"
+    )
     print(
         f"AUTOCRISPY_ROUTE_PREVIEW_SUMMARY: total={len(files)}; "
         f"Architect={architect_count}; Painter={len(painter_files)}; "
-        f"PainterCap={args.painter_share}%; Threshold={args.painter_threshold:.3f}.",
+        f"PainterCap={args.painter_share}%; Threshold={args.painter_threshold:.3f}; "
+        f"Sample={sample_description} (sorted by path).",
         flush=True,
     )
     for input_path, features in scored_files:

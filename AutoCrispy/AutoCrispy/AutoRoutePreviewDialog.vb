@@ -29,7 +29,8 @@ Friend NotInheritable Class AutoRoutePreviewDialog
     Private ReadOnly _items As List(Of AutoRoutePreviewItem)
 
     Public Sub New(PreviewItems As IEnumerable(Of AutoRoutePreviewItem), SourceFolder As String,
-                   PainterShare As Integer, PainterThreshold As Double, ArchitectModel As String, PainterModel As String)
+                   SampleLimit As Integer, PainterShare As Integer, PainterThreshold As Double,
+                   ArchitectModel As String, PainterModel As String)
         If PreviewItems Is Nothing Then
             _items = New List(Of AutoRoutePreviewItem)()
         Else
@@ -52,12 +53,13 @@ Friend NotInheritable Class AutoRoutePreviewDialog
             .AutoEllipsis = True,
             .Padding = New Padding(10, 6, 10, 4),
             .Text = String.Format(CultureInfo.InvariantCulture,
-                "{1} textures · Painter {2} · Architect {3} · Painter cap {4}% for batches of 10+ · minimum score {5:0.00}{0}" &
-                "Folder: {6}{0}" &
-                "Painter model: {7}    |    Architect model: {8}{0}" &
-                "Score = 0.08×detail + 0.05×normalized edge score + 0.15×direction entropy + 0.60×patterns + 0.12×repetition×patterns. Preview only; no upscaling.",
-                Environment.NewLine, _items.Count, PainterItems.Count, ArchitectItems.Count, PainterShare,
-                PainterThreshold, SourceFolder, PainterModelName, ArchitectModelName)
+                "Read-only sample: first up to {1} supported images by path ({2} analyzed) · Painter {3} · Architect {4} · cap {5}% for 10+ · threshold {6:0.00}{0}" &
+                "Folder: {7}{0}" &
+                "Painter model: {8}    |    Architect model: {9}{0}" &
+                "Score = 0.08×detail + 0.05×normalized edge score + 0.15×direction entropy + 0.60×patterns + 0.12×repetition×patterns.{0}" &
+                "Sample roles are relative to these images; the full-folder Painter cap may select different textures.",
+                Environment.NewLine, SampleLimit, _items.Count, PainterItems.Count, ArchitectItems.Count,
+                PainterShare, PainterThreshold, SourceFolder, PainterModelName, ArchitectModelName)
         }
 
         Dim Split As New SplitContainer With {
@@ -130,7 +132,7 @@ Friend NotInheritable Class AutoRoutePreviewDialog
             .RowCount = 3,
             .Padding = New Padding(8)
         }
-        Layout.RowStyles.Add(New RowStyle(SizeType.Absolute, 96.0!))
+        Layout.RowStyles.Add(New RowStyle(SizeType.Absolute, 124.0!))
         Layout.RowStyles.Add(New RowStyle(SizeType.Percent, 100.0!))
         Layout.RowStyles.Add(New RowStyle(SizeType.Absolute, 42.0!))
         Layout.Controls.Add(Summary, 0, 0)

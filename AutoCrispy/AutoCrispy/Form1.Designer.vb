@@ -101,6 +101,8 @@ Partial Class Form1
         Me.AutoPainterThresholdSuffix = New System.Windows.Forms.Label()
         Me.AutoRoutePreviewButton = New System.Windows.Forms.Button()
         Me.AutoRoutePreviewStatusLabel = New System.Windows.Forms.Label()
+        Me.AutoRoutePreviewSampleLabel = New System.Windows.Forms.Label()
+        Me.AutoRoutePreviewSampleCount = New System.Windows.Forms.NumericUpDown()
         Me.AutoArchitectModelLabel = New System.Windows.Forms.Label()
         Me.AutoArchitectModelComboBox = New System.Windows.Forms.ComboBox()
         Me.AutoPainterModelLabel = New System.Windows.Forms.Label()
@@ -176,6 +178,7 @@ Partial Class Form1
         CType(Me.PyTileSize, System.ComponentModel.ISupportInitialize).BeginInit()
         CType(Me.AutoPainterSharePercent, System.ComponentModel.ISupportInitialize).BeginInit()
         CType(Me.AutoPainterThreshold, System.ComponentModel.ISupportInitialize).BeginInit()
+        CType(Me.AutoRoutePreviewSampleCount, System.ComponentModel.ISupportInitialize).BeginInit()
         Me.ChainGroup.SuspendLayout()
         CType(Me.ChainPreview, System.ComponentModel.ISupportInitialize).BeginInit()
         Me.ChainContext.SuspendLayout()
@@ -867,6 +870,8 @@ Partial Class Form1
         Me.PyGroup.Controls.Add(Me.AutoPainterThreshold)
         Me.PyGroup.Controls.Add(Me.AutoPainterThresholdLabel)
         Me.PyGroup.Controls.Add(Me.AutoRoutePreviewStatusLabel)
+        Me.PyGroup.Controls.Add(Me.AutoRoutePreviewSampleLabel)
+        Me.PyGroup.Controls.Add(Me.AutoRoutePreviewSampleCount)
         Me.PyGroup.Controls.Add(Me.AutoRoutePreviewButton)
         Me.PyGroup.Controls.Add(Me.AutoArchitectModelComboBox)
         Me.PyGroup.Controls.Add(Me.AutoArchitectModelLabel)
@@ -963,7 +968,7 @@ Partial Class Form1
         Me.AutoRoutePreviewButton.Name = "AutoRoutePreviewButton"
         Me.AutoRoutePreviewButton.Size = New System.Drawing.Size(162, 27)
         Me.AutoRoutePreviewButton.TabIndex = 20
-        Me.AutoRoutePreviewButton.Text = "Preview assignments..."
+        Me.AutoRoutePreviewButton.Text = "Preview sample..."
         Me.AutoRoutePreviewButton.UseVisualStyleBackColor = True
         Me.AutoRoutePreviewButton.Visible = False
         '
@@ -971,12 +976,34 @@ Partial Class Form1
         '
         Me.AutoRoutePreviewStatusLabel.AutoEllipsis = True
         Me.AutoRoutePreviewStatusLabel.ForeColor = System.Drawing.SystemColors.GrayText
-        Me.AutoRoutePreviewStatusLabel.Location = New System.Drawing.Point(180, 296)
+        Me.AutoRoutePreviewStatusLabel.Location = New System.Drawing.Point(294, 296)
         Me.AutoRoutePreviewStatusLabel.Name = "AutoRoutePreviewStatusLabel"
-        Me.AutoRoutePreviewStatusLabel.Size = New System.Drawing.Size(399, 20)
+        Me.AutoRoutePreviewStatusLabel.Size = New System.Drawing.Size(285, 20)
         Me.AutoRoutePreviewStatusLabel.TabIndex = 21
-        Me.AutoRoutePreviewStatusLabel.Text = "Preview analyzes routes only; no upscaling."
+        Me.AutoRoutePreviewStatusLabel.Text = "textures · read-only preview"
         Me.AutoRoutePreviewStatusLabel.Visible = False
+        '
+        'AutoRoutePreviewSampleLabel
+        '
+        Me.AutoRoutePreviewSampleLabel.AutoSize = True
+        Me.AutoRoutePreviewSampleLabel.Location = New System.Drawing.Point(180, 296)
+        Me.AutoRoutePreviewSampleLabel.Name = "AutoRoutePreviewSampleLabel"
+        Me.AutoRoutePreviewSampleLabel.Size = New System.Drawing.Size(39, 20)
+        Me.AutoRoutePreviewSampleLabel.TabIndex = 22
+        Me.AutoRoutePreviewSampleLabel.Text = "First:"
+        Me.AutoRoutePreviewSampleLabel.Visible = False
+        '
+        'AutoRoutePreviewSampleCount
+        '
+        Me.AutoRoutePreviewSampleCount.Location = New System.Drawing.Point(222, 292)
+        Me.AutoRoutePreviewSampleCount.Maximum = New Decimal(New Integer() {1000, 0, 0, 0})
+        Me.AutoRoutePreviewSampleCount.Minimum = New Decimal(New Integer() {1, 0, 0, 0})
+        Me.AutoRoutePreviewSampleCount.Name = "AutoRoutePreviewSampleCount"
+        Me.AutoRoutePreviewSampleCount.Size = New System.Drawing.Size(64, 26)
+        Me.AutoRoutePreviewSampleCount.TabIndex = 23
+        Me.AutoRoutePreviewSampleCount.TextAlign = System.Windows.Forms.HorizontalAlignment.Center
+        Me.AutoRoutePreviewSampleCount.Value = New Decimal(New Integer() {10, 0, 0, 0})
+        Me.AutoRoutePreviewSampleCount.Visible = False
         '
         'AutoArchitectModelLabel
         '
@@ -1728,6 +1755,7 @@ Partial Class Form1
         CType(Me.PyTileSize, System.ComponentModel.ISupportInitialize).EndInit()
         CType(Me.AutoPainterSharePercent, System.ComponentModel.ISupportInitialize).EndInit()
         CType(Me.AutoPainterThreshold, System.ComponentModel.ISupportInitialize).EndInit()
+        CType(Me.AutoRoutePreviewSampleCount, System.ComponentModel.ISupportInitialize).EndInit()
         Me.ChainGroup.ResumeLayout(False)
         CType(Me.ChainPreview, System.ComponentModel.ISupportInitialize).EndInit()
         Me.ChainContext.ResumeLayout(False)
@@ -1874,6 +1902,8 @@ Partial Class Form1
     Friend WithEvents AutoPainterThresholdSuffix As Label
     Friend WithEvents AutoRoutePreviewButton As Button
     Friend WithEvents AutoRoutePreviewStatusLabel As Label
+    Friend WithEvents AutoRoutePreviewSampleLabel As Label
+    Friend WithEvents AutoRoutePreviewSampleCount As NumericUpDown
     Friend WithEvents AutoArchitectModelLabel As Label
     Friend WithEvents AutoArchitectModelComboBox As ComboBox
     Friend WithEvents AutoPainterModelLabel As Label

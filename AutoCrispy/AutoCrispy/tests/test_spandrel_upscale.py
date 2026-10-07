@@ -332,6 +332,8 @@ class SpandrelRunnerTests(unittest.TestCase):
                     "45",
                     "--painter-threshold",
                     "0.27",
+                    "--preview-limit",
+                    "7",
                 ],
             ):
                 args = runner.parse_args()
@@ -339,6 +341,7 @@ class SpandrelRunnerTests(unittest.TestCase):
             self.assertIsNone(args.output)
             self.assertEqual(args.painter_share, 45)
             self.assertAlmostEqual(args.painter_threshold, 0.27)
+            self.assertEqual(args.preview_limit, 7)
 
     def test_preview_route_reports_feature_scores_and_assignments_without_loading_models(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -385,6 +388,51 @@ class SpandrelRunnerTests(unittest.TestCase):
             self.assertIn("\tArchitect\t0.120000\t", log)
             self.assertIn("Eligible and selected for Painter", log)
             self.assertIn("Below minimum Painter score", log)
+            self.assertIn("Sample=all 2 (sorted by path)", log)
+
+    def test_preview_limit_scores_only_first_sorted_supported_images(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            input_folder = Path(temporary) / "input"
+            input_folder.mkdir()
+            first = input_folder / "a.png"
+            second = input_folder / "b.png"
+            third = input_folder / "c.png"
+            unsupported = input_folder / "ignored.dds"
+            for path in (first, second, third, unsupported):
+                path.touch()
+
+            args = types.SimpleNamespace(
+                input=input_folder,
+                painter_share=30,
+                painter_threshold=0.34,
+                preview_limit=2,
+            )
+            analyzed: list[Path] = []
+            features = {
+                "score": 0.1,
+                "detail": 0.1,
+                "edge_density": 0.1,
+                "orientation_entropy": 0.1,
+                "local_pattern_entropy": 0.1,
+                "periodicity": 0.1,
+            }
+            output = io.StringIO()
+            with (
+                patch.object(
+                    runner,
+                    "_texture_features",
+                    side_effect=lambda path: analyzed.append(path) or features,
+                ),
+                contextlib.redirect_stdout(output),
+            ):
+                result = runner._preview_auto_route(args)
+
+            self.assertEqual(result, 0)
+            self.assertEqual(analyzed, [first, second])
+            self.assertNotIn(third, analyzed)
+            self.assertNotIn(unsupported, analyzed)
+            self.assertIn("total=2; Architect=2; Painter=0", output.getvalue())
+            self.assertIn("Sample=first 2 of 3 (sorted by path)", output.getvalue())
 
     def test_painter_threshold_filters_low_scoring_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

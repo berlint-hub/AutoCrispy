@@ -1150,6 +1150,8 @@ Public Class Form1
         AutoPainterThresholdSuffix.Visible = False
         AutoRoutePreviewButton.Visible = False
         AutoRoutePreviewStatusLabel.Visible = False
+        AutoRoutePreviewSampleLabel.Visible = False
+        AutoRoutePreviewSampleCount.Visible = False
         AutoArchitectModelLabel.Visible = False
         AutoArchitectModelComboBox.Visible = False
         AutoPainterModelLabel.Visible = False
@@ -1171,6 +1173,8 @@ Public Class Form1
         AutoPainterThresholdSuffix.Visible = Model.IsAutoTextureRouter
         AutoRoutePreviewButton.Visible = Model.IsAutoTextureRouter
         AutoRoutePreviewStatusLabel.Visible = Model.IsAutoTextureRouter
+        AutoRoutePreviewSampleLabel.Visible = Model.IsAutoTextureRouter
+        AutoRoutePreviewSampleCount.Visible = Model.IsAutoTextureRouter
         AutoArchitectModelLabel.Visible = Model.IsAutoTextureRouter
         AutoArchitectModelComboBox.Visible = Model.IsAutoTextureRouter
         AutoPainterModelLabel.Visible = Model.IsAutoTextureRouter
@@ -1198,6 +1202,8 @@ Public Class Form1
             UiToolTip.SetToolTip(AutoPainterSharePercent, "Maximum Painter share for batches of 10 or more textures. Smaller batches use the score threshold without a percentage cap.")
             UiToolTip.SetToolTip(AutoPainterThresholdLabel, "Textures below this feature score are assigned to Architect. This is a feature heuristic, not semantic classification.")
             UiToolTip.SetToolTip(AutoPainterThreshold, "Minimum feature score for Painter eligibility (0.05–1.00). Lower values make more textures eligible.")
+            UiToolTip.SetToolTip(AutoRoutePreviewSampleLabel, "Analyze the first N supported textures, sorted by relative path. Preview is read-only.")
+            UiToolTip.SetToolTip(AutoRoutePreviewSampleCount, "Number of supported textures to sample for a quick read-only route preview.")
             Return
         End If
         If Model.Scale > 0 Then
@@ -1249,6 +1255,10 @@ Public Class Form1
         UpdateSpandrelModelInfo()
     End Sub
 
+    Private Sub AutoRoutePreviewSampleCount_ValueChanged(sender As Object, e As EventArgs) Handles AutoRoutePreviewSampleCount.ValueChanged
+        MarkAutoRoutePreviewStale()
+    End Sub
+
     Private Sub MarkAutoRoutePreviewStale()
         If Not AutoRoutePreviewHasResult Then Return
         AutoRoutePreviewHasResult = False
@@ -1256,11 +1266,14 @@ Public Class Form1
     End Sub
 
     Private Async Sub AutoRoutePreviewButton_Click(sender As Object, e As EventArgs) Handles AutoRoutePreviewButton.Click
-        Dim InitialFolder As String = InputTextBox.Text.Trim()
+        Dim PreviewProfiles As List(Of FormSettings.GamePathProfile) = GetEffectiveGamePathProfiles()
+        Dim InitialFolder As String = If(PreviewProfiles.Count > 0,
+            PreviewProfiles(0).InputPath, InputTextBox.Text.Trim())
         If Not Directory.Exists(InitialFolder) Then InitialFolder = Application.StartupPath
         Dim PreviewFolder As String = ""
         Using FolderPicker As New FolderBrowserDialog
-            FolderPicker.Description = "Choose the texture folder to preview. This analyzes assignments only and does not run either upscaler."
+            FolderPicker.Description = "Choose an existing input texture folder to inspect." & Environment.NewLine &
+                "Read-only: nothing is saved or upscaled; only the first N supported textures are analyzed."
             FolderPicker.ShowNewFolderButton = False
             FolderPicker.SelectedPath = InitialFolder
             If FolderPicker.ShowDialog(Me) <> DialogResult.OK Then Return
@@ -1292,6 +1305,8 @@ Public Class Form1
         Dim PreviousPainterEnabled As Boolean = AutoPainterModelComboBox.Enabled
         Dim PreviousShareEnabled As Boolean = AutoPainterSharePercent.Enabled
         Dim PreviousThresholdEnabled As Boolean = AutoPainterThreshold.Enabled
+        Dim PreviousSampleCountEnabled As Boolean = AutoRoutePreviewSampleCount.Enabled
+        Dim PreviewSampleLimit As Integer = CInt(AutoRoutePreviewSampleCount.Value)
         AutoRoutePreviewButton.Enabled = False
         PyModel.Enabled = False
         RefreshSpandrelModelsButton.Enabled = False
@@ -1299,15 +1314,19 @@ Public Class Form1
         AutoPainterModelComboBox.Enabled = False
         AutoPainterSharePercent.Enabled = False
         AutoPainterThreshold.Enabled = False
-        AutoRoutePreviewStatusLabel.Text = "Analyzing texture features…"
+        AutoRoutePreviewSampleCount.Enabled = False
+        AutoRoutePreviewStatusLabel.Text = "Analyzing sample…"
         Dim PreviewDebugEnabled As Boolean = DebugCheckbox.Checked
         Try
             Dim PreviewItems As List(Of AutoRoutePreviewItem) = Await Task.Run(
-                Function() RunAutoRoutePreview(PythonExecutable, RunnerPath, PreviewFolder, Package, PreviewDebugEnabled))
+                Function() RunAutoRoutePreview(
+                    PythonExecutable, RunnerPath, PreviewFolder, Package,
+                    PreviewSampleLimit, PreviewDebugEnabled))
             Dim PainterCount As Integer = PreviewItems.Where(Function(Item) String.Equals(Item.Role, "Painter", StringComparison.OrdinalIgnoreCase)).Count()
-            AutoRoutePreviewStatusLabel.Text = "Preview: " & PainterCount.ToString() & " Painter · " & (PreviewItems.Count - PainterCount).ToString() & " Architect"
+            AutoRoutePreviewStatusLabel.Text = "Sample " & PreviewItems.Count.ToString() & ": " &
+                PainterCount.ToString() & " Painter / " & (PreviewItems.Count - PainterCount).ToString() & " Architect"
             AutoRoutePreviewHasResult = True
-            Using PreviewDialog As New AutoRoutePreviewDialog(PreviewItems, PreviewFolder,
+            Using PreviewDialog As New AutoRoutePreviewDialog(PreviewItems, PreviewFolder, PreviewSampleLimit,
                 Package.PainterShare, CDbl(Package.PainterThreshold), Package.ArchitectModel, Package.PainterModel)
                 PreviewDialog.ShowDialog(Me)
             End Using
@@ -1324,13 +1343,15 @@ Public Class Form1
             AutoPainterModelComboBox.Enabled = PreviousPainterEnabled
             AutoPainterSharePercent.Enabled = PreviousShareEnabled
             AutoPainterThreshold.Enabled = PreviousThresholdEnabled
+            AutoRoutePreviewSampleCount.Enabled = PreviousSampleCountEnabled
         End Try
     End Sub
 
     Private Function RunAutoRoutePreview(PythonExecutable As String, RunnerPath As String, SourceFolder As String,
-                                         Package As FormSettings.PythonPackage, DebugEnabled As Boolean) As List(Of AutoRoutePreviewItem)
+                                         Package As FormSettings.PythonPackage, SampleLimit As Integer,
+                                         DebugEnabled As Boolean) As List(Of AutoRoutePreviewItem)
         Dim StartInfo As New ProcessStartInfo(PythonExecutable,
-            MakeSpandrelPreviewCommand(RunnerPath, SourceFolder, Package, DebugEnabled))
+            MakeSpandrelPreviewCommand(RunnerPath, SourceFolder, Package, SampleLimit, DebugEnabled))
         StartInfo.WorkingDirectory = Application.StartupPath
         StartInfo.RedirectStandardOutput = True
         StartInfo.RedirectStandardError = True
@@ -2235,11 +2256,13 @@ Public Class Form1
     End Function
 
     Private Function MakeSpandrelPreviewCommand(RunnerPath As String, SourceFolder As String,
-                                                 Package As FormSettings.PythonPackage, DebugEnabled As Boolean) As String
+                                                 Package As FormSettings.PythonPackage, SampleLimit As Integer,
+                                                 DebugEnabled As Boolean) As String
         Dim Result As New ArguementString
         Result.AddArguement(Quote(RunnerPath))
         Result.AddArguement("--preview-route")
         Result.AddArguement("--input", Quote(SourceFolder))
+        Result.AddArguement("--preview-limit", SampleLimit.ToString(CultureInfo.InvariantCulture))
         Dim PainterShare As Integer = Package.PainterShare
         If PainterShare < 10 OrElse PainterShare > 90 Then PainterShare = 30
         Result.AddArguement("--painter-share", PainterShare.ToString())
