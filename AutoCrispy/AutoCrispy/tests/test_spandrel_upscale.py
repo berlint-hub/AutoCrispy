@@ -40,6 +40,7 @@ class FakeImageDescriptor:
         architecture: str = "ExampleSR",
         tags: tuple[str, ...] = (),
         tiling: str = "SUPPORTED",
+        supports_half: bool = False,
     ) -> None:
         self.purpose = purpose
         self.scale = scale
@@ -47,7 +48,7 @@ class FakeImageDescriptor:
         self.output_channels = output_channels
         self.architecture = types.SimpleNamespace(id=architecture)
         self.tags = tags
-        self.supports_half = False
+        self.supports_half = supports_half
         self.supports_bfloat16 = False
         self.tiling = types.SimpleNamespace(name=tiling)
         self.model = FakeNetwork()
@@ -117,7 +118,7 @@ class SpandrelRunnerTests(unittest.TestCase):
                 path.touch()
 
             models: dict[str, object] = {
-                "valid.pth": FakeImageDescriptor(tiling="INTERNAL"),
+                "valid.pth": FakeImageDescriptor(tiling="INTERNAL", supports_half=True),
                 "1x-DXTDecompressor-Source-V3.pth": FakeImageDescriptor(
                     purpose="Restoration", scale=1, architecture="ESRGAN"
                 ),
@@ -160,10 +161,9 @@ class SpandrelRunnerTests(unittest.TestCase):
             self.assertEqual(base64.b64decode(dxt_details[0]).decode("utf-8"), "ESRGAN")
             self.assertEqual(dxt_details[1], "1")
             self.assertEqual(base64.b64decode(dxt_details[2]).decode("utf-8"), "Restoration")
-            self.assertEqual(dxt_details[3:], ["3", "3", "SUPPORTED"])
-            self.assertEqual(
-                details_by_path[str(files["valid.pth"].resolve())][5], "INTERNAL"
-            )
+            self.assertEqual(dxt_details[3:], ["3", "3", "SUPPORTED", "false"])
+            valid_details = details_by_path[str(files["valid.pth"].resolve())]
+            self.assertEqual(valid_details[5:], ["INTERNAL", "true"])
 
     def test_listing_requires_an_existing_model_folder(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -284,6 +284,21 @@ class SpandrelRunnerTests(unittest.TestCase):
             with patch.dict(sys.modules, {"torch": torch, "spandrel": spandrel}):
                 _, device, dtype, _ = runner._load_model(
                     checkpoint, force_cpu=False, generic_model=True
+                )
+
+            self.assertEqual(device.type, "cuda")
+            self.assertIs(dtype, torch.float16)
+
+    def test_explicit_fp16_uses_fp16_when_cuda_checkpoint_supports_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkpoint = Path(temporary) / "half-model.pth"
+            checkpoint.touch()
+            descriptor = FakeImageDescriptor(architecture="SomeRegisteredSR", supports_half=True)
+            torch, spandrel = self.make_fake_modules({checkpoint.name: descriptor})
+            torch.cuda = types.SimpleNamespace(is_available=lambda: True)
+            with patch.dict(sys.modules, {"torch": torch, "spandrel": spandrel}):
+                _, device, dtype, _ = runner._load_model(
+                    checkpoint, force_cpu=False, generic_model=True, precision="fp16"
                 )
 
             self.assertEqual(device.type, "cuda")

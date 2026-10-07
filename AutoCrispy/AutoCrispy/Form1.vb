@@ -20,6 +20,7 @@ Public Class Form1
     Private LastSelectedArchitectModelPath As String = ""
     Private LastSelectedPainterModelPath As String = ""
     Private IsUpdatingAutoRouteModelSelectors As Boolean = False
+    Private IsUpdatingPrecisionSelection As Boolean
     Private AutoRoutePreviewHasResult As Boolean = False
     Private ReadOnly UiToolTip As New ToolTip()
     Private ReadOnly SpandrelTilingBadge As New System.Windows.Forms.Label()
@@ -98,6 +99,8 @@ Public Class Form1
         Public Property InputChannels As Integer
         Public Property OutputChannels As Integer
         Public Property Tiling As String = "unknown"
+        Public Property SupportsHalf As Boolean
+        Public Property PrecisionSupportKnown As Boolean
         Public Property IsAutoTextureRouter As Boolean
         Public Property ArchitectModelPath As String
         Public Property PainterModelPath As String
@@ -692,6 +695,10 @@ Public Class Form1
                                         Model.InputChannels = InputChannels
                                         Model.OutputChannels = OutputChannels
                                         If ModelFields.Length >= 7 Then Model.Tiling = ModelFields(6)
+                                        If ModelFields.Length >= 8 Then
+                                            Model.SupportsHalf = String.Equals(ModelFields(7), "true", StringComparison.OrdinalIgnoreCase)
+                                            Model.PrecisionSupportKnown = True
+                                        End If
                                     End If
                                     Result.Add(Model)
                                 End If
@@ -1342,6 +1349,7 @@ Public Class Form1
         SpandrelModelInfoLabel.Padding = New Padding(6, 0, 6, 0)
         SpandrelModelInfoLabel.TextAlign = ContentAlignment.MiddleLeft
         LayoutSpandrelModelCard(False)
+        AddHandler PyPrecisionComboBox.SelectedIndexChanged, AddressOf PyPrecisionComboBox_SelectedIndexChanged
         UiToolTip.SetToolTip(Label25, "Maximum input tile edge in pixels. Set to 0 to try a full image first.")
     End Sub
 
@@ -1384,15 +1392,143 @@ Public Class Form1
         Return "unknown"
     End Function
 
+    Private Function FindSpandrelModelByPath(ModelPath As String) As SpandrelModelInfo
+        If String.IsNullOrWhiteSpace(ModelPath) Then Return Nothing
+        For Each Candidate As SpandrelModelInfo In SupportedSpandrelModels
+            If Not Candidate.IsAutoTextureRouter AndAlso
+                String.Equals(Candidate.FilePath, ModelPath, StringComparison.OrdinalIgnoreCase) Then
+                Return Candidate
+            End If
+        Next
+        Return Nothing
+    End Function
+
+    Private Function TryGetSpandrelModelFP16Support(ModelPath As String, ByRef SupportsFP16 As Boolean) As Boolean
+        SupportsFP16 = False
+        Dim Model As SpandrelModelInfo = FindSpandrelModelByPath(ModelPath)
+        If Model Is Nothing OrElse Not Model.PrecisionSupportKnown Then Return False
+        SupportsFP16 = Model.SupportsHalf
+        Return True
+    End Function
+
+    Private Function TryGetSelectedModelFP16Support(ByRef SupportsFP16 As Boolean) As Boolean
+        SupportsFP16 = False
+        Dim BackendName As String = If(ExeComboBox.SelectedItem, "").ToString()
+        If BackendName = SpandrelBackendName Then
+            If PyModel.SelectedIndex < 0 OrElse PyModel.SelectedIndex >= SupportedSpandrelModels.Count Then Return False
+            Dim Model As SpandrelModelInfo = SupportedSpandrelModels(PyModel.SelectedIndex)
+            If Model.IsAutoTextureRouter Then
+                Dim ArchitectSupported As Boolean = False
+                Dim PainterSupported As Boolean = False
+                If Not TryGetSpandrelModelFP16Support(
+                    GetSelectedAutoRouteModelPath(AutoArchitectModelComboBox), ArchitectSupported
+                ) Then Return False
+                If Not TryGetSpandrelModelFP16Support(
+                    GetSelectedAutoRouteModelPath(AutoPainterModelComboBox), PainterSupported
+                ) Then Return False
+                SupportsFP16 = ArchitectSupported AndAlso PainterSupported
+                Return True
+            End If
+            If Not Model.PrecisionSupportKnown Then Return False
+            SupportsFP16 = Model.SupportsHalf
+            Return True
+        End If
+
+        Dim ModelPath As String = ""
+        If BackendName = PLKSRBackendName OrElse BackendName = "RealPLKSR" Then
+            ModelPath = PLKSRModelPath
+        ElseIf BackendName = DAT2BackendName Then
+            ModelPath = DAT2ModelPath
+        Else
+            Return False
+        End If
+        Return TryGetSpandrelModelFP16Support(ModelPath, SupportsFP16)
+    End Function
+
+    Private Sub ApplyPrecisionCompatibilityHint(BaseTilingHint As String, PrecisionSupportKnown As Boolean,
+                                                 SupportsFP16 As Boolean, SwitchedToAuto As Boolean)
+        If Not PrecisionSupportKnown Then
+            TileSizeHint.Text = BaseTilingHint
+            TileSizeHint.BackColor = System.Drawing.Color.Transparent
+            TileSizeHint.Padding = Padding.Empty
+            UiToolTip.SetToolTip(TileSizeHint, BaseTilingHint)
+            PyPrecisionComboBox.BackColor = System.Drawing.SystemColors.Window
+            Return
+        End If
+
+        Dim PrecisionHint As String = ""
+        Dim PrecisionTooltip As String = ""
+        If Not SupportsFP16 Then
+            If SwitchedToAuto Then
+                PrecisionHint = "FP16 unavailable · switched to Auto (FP32)."
+            ElseIf PyPrecisionComboBox.SelectedIndex = 2 Then
+                PrecisionHint = "FP16 unavailable · FP32 selected."
+            Else
+                PrecisionHint = "FP16 unavailable · Auto uses FP32."
+            End If
+            If SwitchedToAuto Then
+                PrecisionTooltip = "This checkpoint does not advertise FP16 support. The selection was reset to Auto; Auto uses FP32 for this model."
+            Else
+                PrecisionTooltip = "This checkpoint does not advertise FP16 support. Auto uses FP32; selecting FP16 switches back to Auto."
+            End If
+            TileSizeHint.ForeColor = System.Drawing.Color.FromArgb(133, 83, 0)
+            TileSizeHint.BackColor = System.Drawing.Color.FromArgb(255, 244, 214)
+            TileSizeHint.Padding = New Padding(4, 0, 4, 0)
+            PyPrecisionComboBox.BackColor = System.Drawing.Color.FromArgb(255, 244, 214)
+        Else
+            If PyCPU.Checked Then
+                PrecisionHint = "CPU inference uses FP32."
+            ElseIf PyPrecisionComboBox.SelectedIndex = 1 Then
+                PrecisionHint = "FP16 selected."
+            ElseIf PyPrecisionComboBox.SelectedIndex = 2 Then
+                PrecisionHint = "FP32 selected."
+            Else
+                PrecisionHint = "Auto selects FP16 on CUDA."
+            End If
+            PrecisionTooltip = "This checkpoint advertises FP16 support." & Environment.NewLine &
+                "Auto uses FP16 on CUDA; FP32 remains available for maximum compatibility."
+            TileSizeHint.ForeColor = System.Drawing.Color.FromArgb(57, 95, 73)
+            TileSizeHint.BackColor = System.Drawing.Color.FromArgb(234, 245, 238)
+            TileSizeHint.Padding = New Padding(4, 0, 4, 0)
+            PyPrecisionComboBox.BackColor = System.Drawing.SystemColors.Window
+        End If
+
+        TileSizeHint.Text = PrecisionHint & " " & BaseTilingHint
+        UiToolTip.SetToolTip(TileSizeHint, PrecisionTooltip & Environment.NewLine & BaseTilingHint)
+        UiToolTip.SetToolTip(PyPrecisionComboBox, PrecisionTooltip)
+    End Sub
+
+    Private Sub PyPrecisionComboBox_SelectedIndexChanged(sender As Object, e As EventArgs)
+        If IsUpdatingPrecisionSelection Then Return
+        UpdateSpandrelModelInfo()
+    End Sub
+
     Private Sub UpdateSpandrelModelInfo()
         Dim BackendName As String = If(ExeComboBox.SelectedItem, "").ToString()
+        Dim BaseTilingHint As String = TileSizeHint.Text
+        If BackendName = PLKSRBackendName OrElse BackendName = "RealPLKSR" OrElse BackendName = DAT2BackendName Then
+            BaseTilingHint = "0 = full image first; retries smaller tiles on GPU memory errors."
+        End If
+        Dim SelectedModelSupportsFP16 As Boolean = False
+        Dim PrecisionSupportKnown As Boolean = TryGetSelectedModelFP16Support(SelectedModelSupportsFP16)
+        Dim PrecisionFallbackNotice As Boolean = False
+        If PrecisionSupportKnown AndAlso Not SelectedModelSupportsFP16 AndAlso
+            PyPrecisionComboBox.SelectedIndex = 1 AndAlso Not PyCPU.Checked Then
+            IsUpdatingPrecisionSelection = True
+            Try
+                PyPrecisionComboBox.SelectedIndex = 0
+                PrecisionFallbackNotice = True
+            Finally
+                IsUpdatingPrecisionSelection = False
+            End Try
+        End If
         Dim IsSpandrelSelected As Boolean = String.Equals(BackendName, SpandrelBackendName, StringComparison.OrdinalIgnoreCase)
         Dim UsesSpandrelRunner As Boolean = IsSpandrelPackageType(BackendName)
         PyPrecisionLabel.Visible = UsesSpandrelRunner
         PyPrecisionComboBox.Visible = UsesSpandrelRunner
         PyPrecisionComboBox.Enabled = UsesSpandrelRunner AndAlso Not PyCPU.Checked
         UiToolTip.SetToolTip(PyPrecisionComboBox,
-            "Auto uses FP16 only when a CUDA model advertises support. FP16 requires CUDA; FP32 disables TF32 for full CUDA precision.")
+            "Auto uses supported FP16 on CUDA. If a checkpoint cannot use FP16, AutoCrispy switches to Auto/FP32; FP32 disables TF32.")
         SpandrelModelInfoLabel.Visible = IsSpandrelSelected
         LayoutSpandrelModelCard(IsSpandrelSelected)
         SpandrelScanStatusLabel.Visible = IsSpandrelSelected
@@ -1400,6 +1536,9 @@ Public Class Form1
         PyTileSize.Enabled = True
         Label25.Enabled = True
         TileSizeHint.ForeColor = System.Drawing.SystemColors.GrayText
+        TileSizeHint.BackColor = System.Drawing.Color.Transparent
+        TileSizeHint.Padding = Padding.Empty
+        PyPrecisionComboBox.BackColor = System.Drawing.SystemColors.Window
         AutoPainterShareLabel.Visible = False
         AutoPainterSharePercent.Visible = False
         AutoPainterShareSuffix.Visible = False
@@ -1415,7 +1554,13 @@ Public Class Form1
         AutoPainterModelLabel.Visible = False
         AutoPainterModelComboBox.Visible = False
         If Not IsSpandrelSelected Then
-            UiToolTip.SetToolTip(PyTileSize, TileSizeHint.Text)
+            If PrecisionSupportKnown Then
+                ApplyPrecisionCompatibilityHint(
+                    BaseTilingHint, PrecisionSupportKnown, SelectedModelSupportsFP16, PrecisionFallbackNotice
+                )
+            Else
+                UiToolTip.SetToolTip(PyTileSize, BaseTilingHint)
+            End If
             Return
         End If
 
@@ -1468,6 +1613,9 @@ Public Class Form1
             )
             TileSizeHint.Text = "Architect and Painter apply their own model's tiling policy."
             TileSizeHint.ForeColor = System.Drawing.Color.FromArgb(75, 91, 109)
+            ApplyPrecisionCompatibilityHint(
+                TileSizeHint.Text, PrecisionSupportKnown, SelectedModelSupportsFP16, PrecisionFallbackNotice
+            )
             AutoPainterShareSuffix.Text = "strict cap (floored)"
             AutoPainterThresholdSuffix.Text = "below uses Architect"
             SpandrelModelInfoLabel.Text = "Auto routing · " & PainterShareText & "% Painter cap · min score " & PainterThresholdText
@@ -1540,6 +1688,9 @@ Public Class Form1
                 TileSizeHint.ForeColor = System.Drawing.SystemColors.GrayText
                 UiToolTip.SetToolTip(PyTileSize, TilingTooltip)
         End Select
+        ApplyPrecisionCompatibilityHint(
+            TileSizeHint.Text, PrecisionSupportKnown, SelectedModelSupportsFP16, PrecisionFallbackNotice
+        )
         If Model.Scale > 0 Then
             SpandrelModelInfoLabel.Text = Model.Scale.ToString() & "× " & Model.Purpose & " · RGB " &
                 Model.InputChannels.ToString() & "→" & Model.OutputChannels.ToString() & " · " & Model.Architecture
@@ -1808,6 +1959,7 @@ Public Class Form1
             PyPrecisionComboBox.SelectedIndex = 0
         End If
         PyPrecisionComboBox.Enabled = Not PyCPU.Checked AndAlso IsSpandrelPackageType(If(ExeComboBox.SelectedItem, "").ToString())
+        UpdateSpandrelModelInfo()
     End Sub
 
     Public Function GetSelectedPythonPackage(Optional IncludeRoutePreferences As Boolean = True) As FormSettings.PythonPackage

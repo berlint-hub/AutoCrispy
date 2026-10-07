@@ -112,7 +112,7 @@ def parse_args() -> argparse.Namespace:
         "--precision",
         choices=("auto", "fp16", "fp32"),
         default="auto",
-        help="Inference precision: auto selects supported FP16 on CUDA; fp32 disables TF32",
+        help="Auto uses supported FP16 on CUDA; explicit FP16 requires checkpoint support; FP32 disables TF32",
     )
     parser.add_argument(
         "--cpu", action="store_true", help="Force CPU inference instead of CUDA"
@@ -279,8 +279,8 @@ def _load_model(
         )
 
     # Use fp16 only when the checkpoint explicitly advertises support. Some
-    # community checkpoints advertise bfloat16 but still mix float32-only
-    # operations in their forward pass; float32 is the safe fallback.
+    # checkpoints advertise bfloat16 but still mix float32-only operations in
+    # their forward pass.
     if precision == "fp16":
         if not descriptor.supports_half:
             raise ValueError(
@@ -956,6 +956,7 @@ def list_supported_models(model_root: Path, debug: bool = False) -> int:
                         str(descriptor.input_channels),
                         str(descriptor.output_channels),
                         (_get_model_tiling_mode(descriptor) or "unknown").upper(),
+                        str(bool(getattr(descriptor, "supports_half", False))).lower(),
                     )
                 )
                 print(f"MODEL:{encoded_path}\t{metadata}", flush=True)
