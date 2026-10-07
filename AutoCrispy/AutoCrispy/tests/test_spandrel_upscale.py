@@ -241,12 +241,15 @@ class SpandrelRunnerTests(unittest.TestCase):
             root = Path(temporary)
             input_folder = root / "input"
             output_folder = root / "output"
-            input_folder.mkdir()
+            nested_folder = input_folder / "nested"
+            nested_folder.mkdir(parents=True)
             architect_file = input_folder / "a-architect.png"
             painter_file = input_folder / "z-painter.png"
-            unsupported_file = input_folder / "ignored.dds"
+            nested_file = nested_folder / "n-architect.png"
+            unsupported_file = nested_folder / "ignored.dds"
             architect_file.touch()
             painter_file.touch()
+            nested_file.touch()
             unsupported_file.touch()
             architect_path = root / "solid-textures-model.pth"
             painter_path = root / "repeating-textures-model.safetensors"
@@ -259,7 +262,7 @@ class SpandrelRunnerTests(unittest.TestCase):
                 painter_model=painter_path,
                 cpu=False,
                 tile_size=512,
-                painter_share=30,
+                painter_share=100,
                 debug=False,
             )
 
@@ -271,9 +274,11 @@ class SpandrelRunnerTests(unittest.TestCase):
                 return {"score": 0.5 if path == painter_file else 0.1}
 
             processed_files: list[Path] = []
+            processed_outputs: dict[Path, Path] = {}
 
-            def fake_process_image(input_path: Path, *_args: object) -> None:
+            def fake_process_image(input_path: Path, output_path: Path, *_args: object) -> None:
                 processed_files.append(input_path)
+                processed_outputs[input_path] = output_path
 
             output = io.StringIO()
             with (
@@ -285,14 +290,56 @@ class SpandrelRunnerTests(unittest.TestCase):
                 result = runner._run_auto_route(args)
 
             self.assertEqual(result, 0)
-            self.assertCountEqual(processed_files, [architect_file, painter_file])
+            self.assertCountEqual(processed_files, [architect_file, painter_file, nested_file])
             self.assertNotIn(unsupported_file, processed_files)
+            self.assertEqual(processed_outputs[nested_file], output_folder / "nested" / nested_file.name)
+            self.assertEqual(processed_outputs[architect_file], output_folder / architect_file.name)
             log = output.getvalue()
-            self.assertIn("AUTOCRISPY_ROUTE_SUMMARY: total=2; Architect=1; Painter=1", log)
+            self.assertIn("AUTOCRISPY_ROUTE_SUMMARY: total=3; Architect=2; Painter=1", log)
             self.assertIn(f"AUTOCRISPY_MODELS: Architect={architect_path.resolve()}", log)
             self.assertIn(f"Painter={painter_path.resolve()}", log)
-            self.assertIn("AUTOCRISPY_RESULT: 1/2 · Architect · a-architect.png · OK", log)
-            self.assertIn("AUTOCRISPY_RESULT: 2/2 · Painter · z-painter.png · OK", log)
+            self.assertIn("AUTOCRISPY_RESULT: 1/3 · Architect · a-architect.png · OK", log)
+            self.assertIn("AUTOCRISPY_RESULT: 3/3 · Painter · z-painter.png · OK", log)
+
+    def test_single_model_runner_recursively_preserves_relative_output_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_folder = root / "input"
+            nested_folder = input_folder / "world" / "textures"
+            nested_folder.mkdir(parents=True)
+            nested_file = nested_folder / "stone.png"
+            nested_file.touch()
+            output_folder = root / "output"
+            model_file = root / "model.pth"
+            args = types.SimpleNamespace(
+                preview_route=False,
+                auto_route=False,
+                model=model_file,
+                input=input_folder,
+                output=output_folder,
+                cpu=True,
+                generic_model=True,
+                tile_size=0,
+            )
+            descriptor = FakeImageDescriptor()
+            outputs: list[tuple[Path, Path]] = []
+            with (
+                patch.object(
+                    runner,
+                    "_load_model",
+                    return_value=(descriptor, FakeDevice("cpu"), "float32", "cpu"),
+                ),
+                patch.object(
+                    runner,
+                    "_process_image",
+                    side_effect=lambda source, destination, *_args: outputs.append((source, destination)),
+                ),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                result = runner.run(args)
+
+            self.assertEqual(result, 0)
+            self.assertEqual(outputs, [(nested_file, output_folder / "world" / "textures" / "stone.png")])
 
     def test_single_checkpoint_cli_does_not_enable_auto_route(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -382,22 +429,23 @@ class SpandrelRunnerTests(unittest.TestCase):
 
             self.assertEqual(result, 0)
             log = output.getvalue()
-            self.assertIn("AUTOCRISPY_ROUTE_PREVIEW_SUMMARY: total=2; Architect=1; Painter=1", log)
+            self.assertIn("AUTOCRISPY_ROUTE_PREVIEW_SUMMARY: total=2; Architect=2; Painter=0", log)
             self.assertIn("AUTOCRISPY_ROUTE_PREVIEW_ITEM:", log)
-            self.assertIn("\tPainter\t0.720000\t", log)
+            self.assertIn("\tArchitect\t0.720000\t", log)
             self.assertIn("\tArchitect\t0.120000\t", log)
-            self.assertIn("Eligible and selected for Painter", log)
+            self.assertIn("Eligible, but outside the Painter share cap", log)
             self.assertIn("Below minimum Painter score", log)
             self.assertIn("Sample=all 2 (sorted by path)", log)
 
-    def test_preview_limit_scores_only_first_sorted_supported_images(self) -> None:
+    def test_preview_limit_scores_first_sorted_supported_images_recursively(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             input_folder = Path(temporary) / "input"
-            input_folder.mkdir()
+            nested_folder = input_folder / "b-nested"
+            nested_folder.mkdir(parents=True)
             first = input_folder / "a.png"
-            second = input_folder / "b.png"
+            second = nested_folder / "b.png"
             third = input_folder / "c.png"
-            unsupported = input_folder / "ignored.dds"
+            unsupported = nested_folder / "ignored.dds"
             for path in (first, second, third, unsupported):
                 path.touch()
 
@@ -484,6 +532,18 @@ class SpandrelRunnerTests(unittest.TestCase):
                 {root / "texture-00.png", root / "texture-01.png", root / "texture-02.png"},
             )
 
+    def test_auto_route_never_rounds_the_painter_cap_up(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for file_count, share in ((12, 30), (11, 90), (19, 10)):
+                with self.subTest(file_count=file_count, share=share):
+                    scored = [
+                        (root / f"{file_count}-{index:02d}.png", {"score": 1.0})
+                        for index in range(file_count)
+                    ]
+                    selected = runner._select_painter_files(scored, painter_share=share)
+                    self.assertLessEqual(len(selected), file_count * share // 100)
+
     def test_auto_route_does_not_force_painter_when_no_texture_score_is_eligible(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -493,15 +553,16 @@ class SpandrelRunnerTests(unittest.TestCase):
             ]
             self.assertEqual(runner._select_painter_files(scored, painter_share=30), set())
 
-    def test_auto_route_uses_absolute_texture_threshold_for_small_batches(self) -> None:
+    def test_auto_route_applies_strict_cap_to_small_batches(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             scored = [
                 (root / "smooth.png", {"score": 0.20}),
                 (root / "grass-like.png", {"score": 0.80}),
             ]
+            self.assertEqual(runner._select_painter_files(scored, painter_share=30), set())
             self.assertEqual(
-                runner._select_painter_files(scored, painter_share=30),
+                runner._select_painter_files(scored, painter_share=50),
                 {root / "grass-like.png"},
             )
 

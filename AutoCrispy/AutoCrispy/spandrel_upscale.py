@@ -39,7 +39,6 @@ SUPPORTED_GENERIC_SCALES = {1, MODEL_SCALE}
 TILE_OVERLAP = 32
 MODEL_FILE_EXTENSIONS = {".pth", ".pt", ".ckpt", ".safetensors"}
 AUTO_ROUTE_MIN_PAINTER_SCORE = 0.34
-AUTO_ROUTE_MIN_RATIO_BATCH = 10
 
 
 def _has_supported_generic_purpose(descriptor: Any) -> bool:
@@ -492,12 +491,27 @@ def _texture_features(input_path: Path) -> dict[str, float]:
     }
 
 
+def _iter_supported_images(input_folder: Path) -> list[Path]:
+    """Return all supported images recursively in deterministic relative-path order."""
+    return sorted(
+        (
+            path
+            for path in input_folder.rglob("*")
+            if path.is_file() and path.suffix.casefold() in SUPPORTED_EXTENSIONS
+        ),
+        key=lambda path: (
+            path.relative_to(input_folder).as_posix().casefold(),
+            path.relative_to(input_folder).as_posix(),
+        ),
+    )
+
+
 def _select_painter_files(
     scored_files: list[tuple[Path, dict[str, float]]],
     painter_share: int,
     painter_threshold: float = AUTO_ROUTE_MIN_PAINTER_SCORE,
 ) -> set[Path]:
-    """Select high-texture images, capped at the requested share for large batches."""
+    """Select eligible high-texture images without exceeding the share cap."""
     if not 0 <= painter_share <= 100:
         raise ValueError("Painter share must be between 0 and 100 percent.")
     if not 0 <= painter_threshold <= 1:
@@ -510,12 +524,7 @@ def _select_painter_files(
     if not eligible or painter_share == 0:
         return set()
 
-    if len(scored_files) < AUTO_ROUTE_MIN_RATIO_BATCH:
-        # A percentage is unstable for a single new/watch-mode texture. Use the
-        # absolute feature threshold until there is enough context for ranking.
-        return {path for path, _ in eligible}
-
-    target_count = int(math.floor(len(scored_files) * painter_share / 100.0 + 0.5))
+    target_count = int(math.floor(len(scored_files) * painter_share / 100.0))
     ranked = sorted(
         eligible,
         key=lambda item: (
@@ -530,11 +539,7 @@ def _select_painter_files(
 def _preview_auto_route(args: argparse.Namespace) -> int:
     if not args.input.is_dir():
         raise NotADirectoryError(f"Input folder not found: {args.input}")
-    available_files = sorted(
-        path
-        for path in args.input.iterdir()
-        if path.is_file() and path.suffix.casefold() in SUPPORTED_EXTENSIONS
-    )
+    available_files = _iter_supported_images(args.input)
     preview_limit = getattr(args, "preview_limit", 0)
     if preview_limit < 0:
         raise ValueError("Preview sample size must be 0 or greater.")
@@ -606,11 +611,7 @@ def _run_auto_route(args: argparse.Namespace) -> int:
     if architect.scale != painter.scale:
         raise ValueError("Architect and Painter checkpoints must use the same scale.")
 
-    files = sorted(
-        path
-        for path in args.input.iterdir()
-        if path.is_file() and path.suffix.casefold() in SUPPORTED_EXTENSIONS
-    )
+    files = _iter_supported_images(args.input)
     if not files:
         print("Auto routing found no supported images.")
         return 0
@@ -673,7 +674,7 @@ def _run_auto_route(args: argparse.Namespace) -> int:
             )
         _process_image(
             input_path,
-            args.output / input_path.name,
+            args.output / input_path.relative_to(args.input),
             model,
             device,
             dtype,
@@ -783,15 +784,11 @@ def run(args: argparse.Namespace) -> int:
         f"{device_name} ({dtype})."
     )
 
-    files = sorted(
-        path
-        for path in args.input.iterdir()
-        if path.is_file() and path.suffix.casefold() in SUPPORTED_EXTENSIONS
-    )
+    files = _iter_supported_images(args.input)
     for input_path in files:
         _process_image(
             input_path,
-            args.output / input_path.name,
+            args.output / input_path.relative_to(args.input),
             model,
             device,
             dtype,

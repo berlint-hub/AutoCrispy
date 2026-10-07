@@ -24,6 +24,14 @@ Public Class Form1
     Private ReadOnly UiToolTip As New ToolTip()
     Private ReadOnly GamePathProfiles As New BindingList(Of FormSettings.GamePathProfile)
     Private CurrentRunGamePaths As List(Of FormSettings.GamePathProfile)
+    Private CurrentRunTempRoot As String = String.Empty
+    Private ProgressScanInFlight As Boolean
+    Private ProgressScanCancellation As CancellationTokenSource
+    Private WatchDogScanInFlight As Boolean
+    Private WatchDogScanCancellation As CancellationTokenSource
+    Private PreviewProcessCancellation As CancellationTokenSource
+    Private CloseAfterWorkerCancellation As Boolean
+    Private FormClosingRequested As Boolean
 
     Const HotToggle As String = "%`"
 
@@ -58,6 +66,8 @@ Public Class Form1
     Private SpandrelScanCancellation As CancellationTokenSource
     Private ReadOnly ActiveProcessLock As New Object()
     Private ActiveProcesses As New List(Of Process)
+    Private ReadOnly ProcessesBeingTerminated As New HashSet(Of Process)
+    Private ReadOnly ProcessJobHandles As New Dictionary(Of Process, IntPtr)
 
 #End Region
 
@@ -98,6 +108,87 @@ Public Class Form1
             End Get
         End Property
     End Class
+
+    Private Class OverallProgressInfo
+        Public Property DoneCount As Integer
+        Public Property TotalCount As Integer
+        Public Property UnsupportedCount As Integer
+        Public Property AlphaFilteredCount As Integer
+        Public Property Percent As Integer
+        Public Property ErrorMessage As String = String.Empty
+    End Class
+
+    Private Class WatchdogScanResult
+        Public Property PendingProfiles As New List(Of FormSettings.GamePathProfile)
+        Public Property MissingProfileCount As Integer
+        Public Property ErrorMessage As String = String.Empty
+    End Class
+
+    Private Class ProcessOutputCapture
+        Public Property ActiveProcess As Process
+        Public Property StartInfo As ProcessStartInfo
+        Public Property StandardOutputTask As Task(Of String)
+        Public Property StandardErrorTask As Task(Of String)
+        Public Property BackendName As String
+        Public Property SaveLocation As String
+        Public Property InputPath As String
+        Public Property StandardOutput As String
+        Public Property StandardError As String
+        Public Property ExitCode As Integer
+    End Class
+
+    <Runtime.InteropServices.StructLayout(Runtime.InteropServices.LayoutKind.Sequential)>
+    Private Structure JobObjectBasicLimitInformation
+        Public PerProcessUserTimeLimit As Long
+        Public PerJobUserTimeLimit As Long
+        Public LimitFlags As UInteger
+        Public MinimumWorkingSetSize As UIntPtr
+        Public MaximumWorkingSetSize As UIntPtr
+        Public ActiveProcessLimit As UInteger
+        Public Affinity As UIntPtr
+        Public PriorityClass As UInteger
+        Public SchedulingClass As UInteger
+    End Structure
+
+    <Runtime.InteropServices.StructLayout(Runtime.InteropServices.LayoutKind.Sequential)>
+    Private Structure JobObjectIoCounters
+        Public ReadOperationCount As ULong
+        Public WriteOperationCount As ULong
+        Public OtherOperationCount As ULong
+        Public ReadTransferCount As ULong
+        Public WriteTransferCount As ULong
+        Public OtherTransferCount As ULong
+    End Structure
+
+    <Runtime.InteropServices.StructLayout(Runtime.InteropServices.LayoutKind.Sequential)>
+    Private Structure JobObjectExtendedLimitInformation
+        Public BasicLimitInformation As JobObjectBasicLimitInformation
+        Public IoInfo As JobObjectIoCounters
+        Public ProcessMemoryLimit As UIntPtr
+        Public JobMemoryLimit As UIntPtr
+        Public PeakProcessMemoryUsed As UIntPtr
+        Public PeakJobMemoryUsed As UIntPtr
+    End Structure
+
+    <Runtime.InteropServices.DllImport("kernel32.dll", CharSet:=Runtime.InteropServices.CharSet.Unicode, SetLastError:=True)>
+    Private Shared Function CreateJobObject(lpJobAttributes As IntPtr, lpName As String) As IntPtr
+    End Function
+
+    <Runtime.InteropServices.DllImport("kernel32.dll", SetLastError:=True)>
+    Private Shared Function SetInformationJobObject(hJob As IntPtr, JobObjectInfoClass As Integer, lpJobObjectInfo As IntPtr, cbJobObjectInfoLength As UInteger) As Boolean
+    End Function
+
+    <Runtime.InteropServices.DllImport("kernel32.dll", SetLastError:=True)>
+    Private Shared Function AssignProcessToJobObject(hJob As IntPtr, hProcess As IntPtr) As Boolean
+    End Function
+
+    <Runtime.InteropServices.DllImport("kernel32.dll", SetLastError:=True)>
+    Private Shared Function TerminateJobObject(hJob As IntPtr, uExitCode As UInteger) As Boolean
+    End Function
+
+    <Runtime.InteropServices.DllImport("kernel32.dll", SetLastError:=True)>
+    Private Shared Function CloseHandle(hObject As IntPtr) As Boolean
+    End Function
 
 #End Region
 
@@ -145,20 +236,71 @@ Public Class Form1
         End If
     End Sub
 
-    Private Sub Form1_Closing(sender As Object, e As EventArgs) Handles MyBase.Closing
-        If SpandrelScanCancellation IsNot Nothing Then
-            Try
-                SpandrelScanCancellation.Cancel()
-            Catch ex As ObjectDisposedException
-                ' The scan already finished while the form was closing.
-            End Try
+    Private Sub Form1_Closing(sender As Object, e As FormClosingEventArgs) Handles MyBase.FormClosing
+        If WorkHorse.IsBusy OrElse SpandrelScanCancellation IsNot Nothing OrElse
+            PreviewProcessCancellation IsNot Nothing OrElse ProgressScanCancellation IsNot Nothing OrElse
+            WatchDogScanCancellation IsNot Nothing Then
+            e.Cancel = True
+            FormClosingRequested = True
+            CloseAfterWorkerCancellation = True
+            WatchDog.Stop()
+            ProgressPollTimer.Stop()
+            SwitchGroups(False)
+            WatchDogButton.Enabled = False
+            AutoRoutePreviewButton.Enabled = False
+            RefreshSpandrelModelsButton.Enabled = False
+            If WorkHorse.IsBusy Then
+                QueueActivityLabel.Text = "Cancelling active work before closing…"
+                WorkHorse.CancelAsync()
+                StopActiveProcesses()
+            End If
+            If SpandrelScanCancellation IsNot Nothing Then
+                Try
+                    SpandrelScanCancellation.Cancel()
+                Catch ex As ObjectDisposedException
+                    ' The model scan already finished.
+                End Try
+            End If
+            If PreviewProcessCancellation IsNot Nothing Then
+                Try
+                    PreviewProcessCancellation.Cancel()
+                Catch ex As ObjectDisposedException
+                    ' The route preview already finished.
+                End Try
+            End If
+            If ProgressScanCancellation IsNot Nothing Then
+                Try
+                    ProgressScanCancellation.Cancel()
+                Catch ex As ObjectDisposedException
+                    ' The progress scan already finished.
+                End Try
+            End If
+            If WatchDogScanCancellation IsNot Nothing Then
+                Try
+                    WatchDogScanCancellation.Cancel()
+                Catch ex As ObjectDisposedException
+                    ' The watcher scan already finished.
+                End Try
+            End If
+            TryCompleteDeferredClose()
+            Return
         End If
+
         If PortableCheckBox.Checked = True Then
             File.WriteAllText(Root & "\portable.xml", Serialize(New FormSettings.Settings(Me)))
         Else
             File.WriteAllText(AppData & "\AutoCrispy\settings.xml", Serialize(New FormSettings.Settings(Me)))
         End If
         UiToolTip.Dispose()
+    End Sub
+
+    Private Sub TryCompleteDeferredClose()
+        If Not CloseAfterWorkerCancellation OrElse WorkHorse.IsBusy OrElse
+            SpandrelScanCancellation IsNot Nothing OrElse PreviewProcessCancellation IsNot Nothing OrElse
+            ProgressScanCancellation IsNot Nothing OrElse WatchDogScanCancellation IsNot Nothing OrElse
+            IsDisposed OrElse Not IsHandleCreated Then Return
+        CloseAfterWorkerCancellation = False
+        BeginInvoke(New MethodInvoker(AddressOf Me.Close))
     End Sub
 
     Public Sub LoadGamePathProfiles(SavedProfiles As List(Of FormSettings.GamePathProfile), ProfilesConfigured As Boolean)
@@ -431,6 +573,7 @@ Public Class Form1
                 If Not IsDisposed Then RefreshSpandrelModelsButton.Enabled = True
             End If
             ScanCancellation.Dispose()
+            TryCompleteDeferredClose()
         End Try
     End Function
 
@@ -472,10 +615,7 @@ Public Class Form1
                 If ScanProcess Is Nothing Then Return Result
                 Using CancellationRegistration As CancellationTokenRegistration = ScanToken.Register(
                     Sub()
-                        Try
-                            If Not ScanProcess.HasExited Then ScanProcess.Kill()
-                        Catch ex As Exception
-                        End Try
+                        Task.Run(Sub() TerminateProcessTree(ScanProcess))
                     End Sub)
                     Dim StandardOutputTask = ScanProcess.StandardOutput.ReadToEndAsync()
                     Dim StandardErrorTask = ScanProcess.StandardError.ReadToEndAsync()
@@ -852,7 +992,7 @@ Public Class Form1
         If WorkHorse.IsBusy Then Return
 
         Dim WatcherWasEnabled As Boolean = WatchDog.Enabled
-        If WatcherWasEnabled Then WatchDog.Stop()
+        If WatcherWasEnabled Then WatchDog.Enabled = False
         Dim RunStarted As Boolean = False
         Try
             Using OFD As New OpenFileDialog With {.Filter = "Image Files|*.png;*.jpg;*.bmp"}
@@ -860,7 +1000,8 @@ Public Class Form1
                 Using SFD As New SaveFileDialog With {.Filter = "PNG Images|*.png"}
                     If SFD.ShowDialog() <> DialogResult.OK Then Return
 
-                    Dim TempPath As String = Path.Combine(Path.GetTempPath(), "Single_0")
+                    CurrentRunTempRoot = CreateRunTempRoot()
+                    Dim TempPath As String = Path.Combine(CurrentRunTempRoot, "input")
                     Directory.CreateDirectory(TempPath)
                     File.Copy(OFD.FileName, Path.Combine(TempPath, Path.GetFileName(SFD.FileName)), True)
                     Dim OutputPath As String = Directory.GetParent(SFD.FileName).FullName
@@ -880,7 +1021,9 @@ Public Class Form1
                 End Using
             End Using
         Finally
+            If Not RunStarted Then CleanupRunTemporaryRoot()
             If WatcherWasEnabled AndAlso Not RunStarted AndAlso WatchDogButton.Text = "Running: True" Then
+                WatchDog.Enabled = True
                 WatchDog.Start()
             End If
         End Try
@@ -1317,11 +1460,14 @@ Public Class Form1
         AutoRoutePreviewSampleCount.Enabled = False
         AutoRoutePreviewStatusLabel.Text = "Analyzing sample…"
         Dim PreviewDebugEnabled As Boolean = DebugCheckbox.Checked
+        Dim PreviewCancellation As New CancellationTokenSource()
+        PreviewProcessCancellation = PreviewCancellation
         Try
             Dim PreviewItems As List(Of AutoRoutePreviewItem) = Await Task.Run(
                 Function() RunAutoRoutePreview(
                     PythonExecutable, RunnerPath, PreviewFolder, Package,
-                    PreviewSampleLimit, PreviewDebugEnabled))
+                    PreviewSampleLimit, PreviewDebugEnabled, PreviewCancellation.Token))
+            If FormClosingRequested OrElse IsDisposed Then Return
             Dim PainterCount As Integer = PreviewItems.Where(Function(Item) String.Equals(Item.Role, "Painter", StringComparison.OrdinalIgnoreCase)).Count()
             AutoRoutePreviewStatusLabel.Text = "Sample " & PreviewItems.Count.ToString() & ": " &
                 PainterCount.ToString() & " Painter / " & (PreviewItems.Count - PainterCount).ToString() & " Architect"
@@ -1330,26 +1476,41 @@ Public Class Form1
                 Package.PainterShare, CDbl(Package.PainterThreshold), Package.ArchitectModel, Package.PainterModel)
                 PreviewDialog.ShowDialog(Me)
             End Using
+        Catch ex As OperationCanceledException
+            If Not FormClosingRequested AndAlso Not IsDisposed Then
+                AutoRoutePreviewHasResult = False
+                AutoRoutePreviewStatusLabel.Text = "Preview cancelled."
+            End If
         Catch ex As Exception
-            AutoRoutePreviewHasResult = False
-            AutoRoutePreviewStatusLabel.Text = "Preview failed."
-            MessageBox.Show(Me, "Could not preview texture routing." & Environment.NewLine & ex.Message,
-                "Auto Texture Routing preview", MessageBoxButtons.OK, MessageBoxIcon.Error)
+            If Not FormClosingRequested AndAlso Not IsDisposed Then
+                AutoRoutePreviewHasResult = False
+                AutoRoutePreviewStatusLabel.Text = "Preview failed."
+                MessageBox.Show(Me, "Could not preview texture routing." & Environment.NewLine & ex.Message,
+                    "Auto Texture Routing preview", MessageBoxButtons.OK, MessageBoxIcon.Error)
+            End If
         Finally
-            AutoRoutePreviewButton.Enabled = True
-            PyModel.Enabled = PreviousPyModelEnabled
-            RefreshSpandrelModelsButton.Enabled = PreviousRefreshEnabled
-            AutoArchitectModelComboBox.Enabled = PreviousArchitectEnabled
-            AutoPainterModelComboBox.Enabled = PreviousPainterEnabled
-            AutoPainterSharePercent.Enabled = PreviousShareEnabled
-            AutoPainterThreshold.Enabled = PreviousThresholdEnabled
-            AutoRoutePreviewSampleCount.Enabled = PreviousSampleCountEnabled
+            If Object.ReferenceEquals(PreviewProcessCancellation, PreviewCancellation) Then
+                PreviewProcessCancellation = Nothing
+            End If
+            PreviewCancellation.Dispose()
+            If Not IsDisposed AndAlso Not FormClosingRequested Then
+                AutoRoutePreviewButton.Enabled = True
+                PyModel.Enabled = PreviousPyModelEnabled
+                RefreshSpandrelModelsButton.Enabled = PreviousRefreshEnabled
+                AutoArchitectModelComboBox.Enabled = PreviousArchitectEnabled
+                AutoPainterModelComboBox.Enabled = PreviousPainterEnabled
+                AutoPainterSharePercent.Enabled = PreviousShareEnabled
+                AutoPainterThreshold.Enabled = PreviousThresholdEnabled
+                AutoRoutePreviewSampleCount.Enabled = PreviousSampleCountEnabled
+            End If
+            TryCompleteDeferredClose()
         End Try
     End Sub
 
     Private Function RunAutoRoutePreview(PythonExecutable As String, RunnerPath As String, SourceFolder As String,
                                          Package As FormSettings.PythonPackage, SampleLimit As Integer,
-                                         DebugEnabled As Boolean) As List(Of AutoRoutePreviewItem)
+                                         DebugEnabled As Boolean, PreviewToken As CancellationToken) As List(Of AutoRoutePreviewItem)
+        PreviewToken.ThrowIfCancellationRequested()
         Dim StartInfo As New ProcessStartInfo(PythonExecutable,
             MakeSpandrelPreviewCommand(RunnerPath, SourceFolder, Package, SampleLimit, DebugEnabled))
         StartInfo.WorkingDirectory = Application.StartupPath
@@ -1360,37 +1521,53 @@ Public Class Form1
 
         Using PreviewProcess As Process = Process.Start(StartInfo)
             If PreviewProcess Is Nothing Then Throw New InvalidOperationException("Failed to start the route preview process.")
-            Dim StandardOutputTask = PreviewProcess.StandardOutput.ReadToEndAsync()
-            Dim StandardErrorTask = PreviewProcess.StandardError.ReadToEndAsync()
-            PreviewProcess.WaitForExit()
-            Dim StandardOutput As String = StandardOutputTask.Result
-            Dim StandardError As String = StandardErrorTask.Result
-            If PreviewProcess.ExitCode <> 0 Then
-                Dim Details As String = If(StandardError.Trim() <> "", StandardError.Trim(), StandardOutput.Trim())
-                If Details.Length > 2000 Then Details = Details.Substring(0, 2000) & "..."
-                Throw New InvalidOperationException("Python route analysis failed (exit code " & PreviewProcess.ExitCode.ToString() & "). " & Details)
-            End If
+            Try
+                RegisterActiveProcess(PreviewProcess)
+                Using CancellationRegistration As CancellationTokenRegistration = PreviewToken.Register(
+                    Sub()
+                        Task.Run(Sub() TerminateProcessTree(PreviewProcess))
+                    End Sub)
+                    Dim StandardOutputTask = PreviewProcess.StandardOutput.ReadToEndAsync()
+                    Dim StandardErrorTask = PreviewProcess.StandardError.ReadToEndAsync()
+                    While Not PreviewProcess.WaitForExit(200)
+                        PreviewToken.ThrowIfCancellationRequested()
+                    End While
+                    Dim StandardOutput As String = StandardOutputTask.Result
+                    Dim StandardError As String = StandardErrorTask.Result
+                    PreviewToken.ThrowIfCancellationRequested()
+                    If PreviewProcess.ExitCode <> 0 Then
+                        Dim Details As String = If(StandardError.Trim() <> "", StandardError.Trim(), StandardOutput.Trim())
+                        If Details.Length > 2000 Then Details = Details.Substring(0, 2000) & "..."
+                        Throw New InvalidOperationException("Python route analysis failed (exit code " & PreviewProcess.ExitCode.ToString() & "). " & Details)
+                    End If
 
-            Dim Result As New List(Of AutoRoutePreviewItem)
-            Const PreviewItemPrefix As String = "AUTOCRISPY_ROUTE_PREVIEW_ITEM:"
-            For Each OutputLine As String In StandardOutput.Split(New String() {vbCrLf, vbLf}, StringSplitOptions.RemoveEmptyEntries)
-                If Not OutputLine.StartsWith(PreviewItemPrefix, StringComparison.Ordinal) Then Continue For
-                Dim Fields As String() = OutputLine.Substring(PreviewItemPrefix.Length).Split(ControlChars.Tab)
-                If Fields.Length < 9 Then Continue For
-                Dim Item As New AutoRoutePreviewItem With {
-                    .FilePath = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(Fields(0))),
-                    .Role = Fields(1),
-                    .Score = ParsePreviewMetric(Fields(2)),
-                    .Detail = ParsePreviewMetric(Fields(3)),
-                    .EdgeDensity = ParsePreviewMetric(Fields(4)),
-                    .OrientationEntropy = ParsePreviewMetric(Fields(5)),
-                    .LocalPatternEntropy = ParsePreviewMetric(Fields(6)),
-                    .Periodicity = ParsePreviewMetric(Fields(7)),
-                    .DecisionReason = Fields(8)
-                }
-                Result.Add(Item)
-            Next
-            Return Result
+                    Dim Result As New List(Of AutoRoutePreviewItem)
+                    Const PreviewItemPrefix As String = "AUTOCRISPY_ROUTE_PREVIEW_ITEM:"
+                    For Each OutputLine As String In StandardOutput.Split(New String() {vbCrLf, vbLf}, StringSplitOptions.RemoveEmptyEntries)
+                        If Not OutputLine.StartsWith(PreviewItemPrefix, StringComparison.Ordinal) Then Continue For
+                        Dim Fields As String() = OutputLine.Substring(PreviewItemPrefix.Length).Split(ControlChars.Tab)
+                        If Fields.Length < 9 Then Continue For
+                        Dim Item As New AutoRoutePreviewItem With {
+                            .FilePath = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(Fields(0))),
+                            .Role = Fields(1),
+                            .Score = ParsePreviewMetric(Fields(2)),
+                            .Detail = ParsePreviewMetric(Fields(3)),
+                            .EdgeDensity = ParsePreviewMetric(Fields(4)),
+                            .OrientationEntropy = ParsePreviewMetric(Fields(5)),
+                            .LocalPatternEntropy = ParsePreviewMetric(Fields(6)),
+                            .Periodicity = ParsePreviewMetric(Fields(7)),
+                            .DecisionReason = Fields(8)
+                        }
+                        Result.Add(Item)
+                    Next
+                    Return Result
+                End Using
+            Catch
+                TerminateProcessTree(PreviewProcess)
+                Throw
+            Finally
+                UnregisterActiveProcess(PreviewProcess)
+            End Try
         End Using
     End Function
 
@@ -1461,39 +1638,49 @@ Public Class Form1
 
 #Region "Background"
 
-    Private Sub WatchDog_Tick(sender As Object, e As EventArgs) Handles WatchDog.Tick
-        Dim ProfilesToWatch As List(Of FormSettings.GamePathProfile) = GetEffectiveGamePathProfiles()
-        Dim PendingProfiles As New List(Of FormSettings.GamePathProfile)
-        Dim MissingProfileCount As Integer = 0
-        ' Use the first stage's input types and cached alpha-filter results so skipped files do not
-        ' keep scheduling empty batches (or an empty Python process) forever.
-        Dim SupportedExtensions As HashSet(Of String) = GetActiveInputFileTypes()
-        Dim AlphaMode As Integer = GetActiveAlphaMode()
+    Private Async Sub WatchDog_Tick(sender As Object, e As EventArgs) Handles WatchDog.Tick
+        If WorkHorse.IsBusy OrElse WatchDogScanInFlight OrElse ProgressScanInFlight OrElse
+            FormClosingRequested OrElse Not WatchDog.Enabled Then Return
 
-        For Each Profile As FormSettings.GamePathProfile In ProfilesToWatch
-            Try
-                If Not Directory.Exists(Profile.InputPath) OrElse Not Directory.Exists(Profile.OutputPath) Then
-                    MissingProfileCount += 1
-                    Continue For
-                End If
-                Dim AllInputFiles As String() = Directory.GetFiles(Profile.InputPath, "*.*", SearchOption.AllDirectories)
-                Dim UnsupportedCount As Integer = 0
-                Dim AlphaFilteredCount As Integer = 0
-                Dim SupportedCount As Integer = 0
-                Dim MissingCount As Integer = 0
-                Dim PendingFiles As String() = GetPendingInputFiles(AllInputFiles, Profile.OutputPath, SupportedExtensions, AlphaMode,
-                                                                      UnsupportedCount, AlphaFilteredCount, SupportedCount, MissingCount)
-                If PendingFiles.Length > 0 Then PendingProfiles.Add(CloneGamePathProfile(Profile))
-            Catch ex As IOException
-                MissingProfileCount += 1
-            Catch ex As UnauthorizedAccessException
-                MissingProfileCount += 1
-            End Try
-        Next
+        WatchDogScanInFlight = True
+        Dim ScanCancellation As New CancellationTokenSource()
+        WatchDogScanCancellation = ScanCancellation
+        Dim ProfilesToWatch As List(Of FormSettings.GamePathProfile) = Nothing
+        Dim ScanResult As WatchdogScanResult = Nothing
+        Try
+            ProfilesToWatch = New List(Of FormSettings.GamePathProfile)
+            For Each Profile As FormSettings.GamePathProfile In GetEffectiveGamePathProfiles()
+                ProfilesToWatch.Add(CloneGamePathProfile(Profile))
+            Next
+            Dim ActiveExtensions As HashSet(Of String) = GetActiveInputFileTypes()
+            Dim SupportedExtensions As HashSet(Of String) = If(ActiveExtensions Is Nothing, Nothing,
+                New HashSet(Of String)(ActiveExtensions, StringComparer.OrdinalIgnoreCase))
+            Dim AlphaMode As Integer = GetActiveAlphaMode()
+            ScanResult = Await Task.Run(Function() ScanWatchdogProfiles(ProfilesToWatch, SupportedExtensions,
+                AlphaMode, ScanCancellation.Token), ScanCancellation.Token)
+        Catch ex As Exception
+            ScanResult = New WatchdogScanResult With {.ErrorMessage = ex.GetBaseException().Message}
+        Finally
+            If Object.ReferenceEquals(WatchDogScanCancellation, ScanCancellation) Then
+                WatchDogScanCancellation = Nothing
+            End If
+            ScanCancellation.Dispose()
+            WatchDogScanInFlight = False
+            TryCompleteDeferredClose()
+        End Try
 
-        If PendingProfiles.Count = 0 Then
-            If MissingProfileCount > 0 Then
-                QueueActivityLabel.Text = "Watching · " & MissingProfileCount.ToString() & " game path(s) unavailable"
+        If IsDisposed OrElse FormClosingRequested OrElse Not WatchDog.Enabled OrElse WorkHorse.IsBusy Then Return
+        If ScanResult Is Nothing Then Return
+        If ScanResult.ErrorMessage <> String.Empty Then
+            QueueActivityLabel.Text = "Watching blocked · " & ScanResult.ErrorMessage
+            UiToolTip.SetToolTip(QueueActivityLabel, ScanResult.ErrorMessage)
+            WatchDog.Interval = 5000
+            Return
+        End If
+
+        If ScanResult.PendingProfiles.Count = 0 Then
+            If ScanResult.MissingProfileCount > 0 Then
+                QueueActivityLabel.Text = "Watching · " & ScanResult.MissingProfileCount.ToString() & " game path(s) unavailable"
             ElseIf ProfilesToWatch.Count = 0 Then
                 QueueActivityLabel.Text = "No checked game paths to watch"
             Else
@@ -1502,91 +1689,159 @@ Public Class Form1
             WaitScale = Math.Min(WaitScale + 1, 100)
             WatchDog.Interval = 1000 + (WaitScale * 590)
         Else
-            QueueActivityLabel.Text = "Starting next batch for " & PendingProfiles.Count.ToString() & " game(s)…"
+            QueueActivityLabel.Text = "Starting next batch for " & ScanResult.PendingProfiles.Count.ToString() & " game(s)…"
             WaitScale = 0
             WatchDog.Interval = 1000
-            CurrentRunGamePaths = PendingProfiles
+            CurrentRunGamePaths = ScanResult.PendingProfiles
             LoadedSettings = New FormSettings.Settings(Me)
             If ChainControl.ListItems.Count = 0 Then
                 AddModelToChain(ExeComboBox.SelectedItem, False)
             End If
             ProgressPollTimer.Interval = 1000
+            WatchDog.Stop()
             WorkHorse.RunWorkerAsync()
         End If
     End Sub
 
+    Private Function ScanWatchdogProfiles(ProfilesToWatch As List(Of FormSettings.GamePathProfile),
+                                          SupportedExtensions As HashSet(Of String), AlphaMode As Integer,
+                                          ScanToken As CancellationToken) As WatchdogScanResult
+        Dim Result As New WatchdogScanResult
+        For Each Profile As FormSettings.GamePathProfile In ProfilesToWatch
+            If ScanToken.IsCancellationRequested Then Exit For
+            Try
+                If Not Directory.Exists(Profile.InputPath) OrElse Not Directory.Exists(Profile.OutputPath) Then
+                    Result.MissingProfileCount += 1
+                    Continue For
+                End If
+                Dim AllInputFiles As String() = Directory.GetFiles(Profile.InputPath, "*.*", SearchOption.AllDirectories)
+                If ScanToken.IsCancellationRequested Then Exit For
+                Dim UnsupportedCount As Integer = 0
+                Dim AlphaFilteredCount As Integer = 0
+                Dim SupportedCount As Integer = 0
+                Dim MissingCount As Integer = 0
+                Dim PendingFiles As String() = GetPendingInputFiles(AllInputFiles, Profile.OutputPath, SupportedExtensions, AlphaMode,
+                                                                      UnsupportedCount, AlphaFilteredCount, SupportedCount, MissingCount)
+                If PendingFiles.Length > 0 Then Result.PendingProfiles.Add(CloneGamePathProfile(Profile))
+            Catch ex As IOException
+                Result.MissingProfileCount += 1
+            Catch ex As UnauthorizedAccessException
+                Result.MissingProfileCount += 1
+            Catch ex As Exception
+                If Result.ErrorMessage = String.Empty Then Result.ErrorMessage = ex.GetBaseException().Message
+            End Try
+        Next
+        Return Result
+    End Function
+
     ' Progress is overall completion for files the first pipeline stage can accept.
     ' Match by basename so format conversions (for example PNG input to DDS output) count as done.
-    Private Sub ProgressPollTimer_Tick(sender As Object, e As EventArgs) Handles ProgressPollTimer.Tick
-        Try
-            Dim DoneCount As Integer = 0
-            Dim TotalCount As Integer = 0
-            Dim UnsupportedCount As Integer = 0
-            Dim AlphaFilteredCount As Integer = 0
-            Dim Percent As Integer = GetOverallProgress(DoneCount, TotalCount, UnsupportedCount, AlphaFilteredCount)
-            If Percent < UpscaleProgress.Minimum Then Percent = UpscaleProgress.Minimum
-            If Percent > UpscaleProgress.Maximum Then Percent = UpscaleProgress.Maximum
-            UpscaleProgress.Value = Percent
-            Dim SkippedSummary As String = ""
-            If UnsupportedCount > 0 Then SkippedSummary &= " · " & UnsupportedCount.ToString() & " unsupported skipped"
-            If AlphaFilteredCount > 0 Then SkippedSummary &= " · " & AlphaFilteredCount.ToString() & " skipped by alpha filter"
-            QueueSummaryLabel.Text = DoneCount.ToString() & " / " & TotalCount.ToString() & " textures complete (" & Percent.ToString() & "%)" & SkippedSummary
+    Private Async Sub ProgressPollTimer_Tick(sender As Object, e As EventArgs) Handles ProgressPollTimer.Tick
+        If ProgressScanInFlight OrElse WatchDogScanInFlight OrElse FormClosingRequested Then Return
 
-            If Not WorkHorse.IsBusy AndAlso RefreshSpandrelModelsButton.Enabled Then
+        ProgressScanInFlight = True
+        Dim ScanCancellation As New CancellationTokenSource()
+        ProgressScanCancellation = ScanCancellation
+        Try
+            Dim ProfilesToScan As New List(Of FormSettings.GamePathProfile)
+            For Each Profile As FormSettings.GamePathProfile In GetEffectiveGamePathProfiles()
+                ProfilesToScan.Add(CloneGamePathProfile(Profile))
+            Next
+            Dim ActiveExtensions As HashSet(Of String) = GetActiveInputFileTypes()
+            Dim SupportedExtensions As HashSet(Of String) = If(ActiveExtensions Is Nothing, Nothing,
+                New HashSet(Of String)(ActiveExtensions, StringComparer.OrdinalIgnoreCase))
+            Dim AlphaMode As Integer = GetActiveAlphaMode()
+            Dim Progress As OverallProgressInfo = Await Task.Run(
+                Function() GetOverallProgress(ProfilesToScan, SupportedExtensions, AlphaMode, ScanCancellation.Token),
+                ScanCancellation.Token)
+            If IsDisposed OrElse FormClosingRequested Then Return
+
+            Dim Percent As Integer = Math.Max(UpscaleProgress.Minimum, Math.Min(UpscaleProgress.Maximum, Progress.Percent))
+            UpscaleProgress.Value = Percent
+            Dim SkippedSummary As String = String.Empty
+            If Progress.UnsupportedCount > 0 Then SkippedSummary &= " · " & Progress.UnsupportedCount.ToString() & " unsupported skipped"
+            If Progress.AlphaFilteredCount > 0 Then SkippedSummary &= " · " & Progress.AlphaFilteredCount.ToString() & " skipped by alpha filter"
+            QueueSummaryLabel.Text = Progress.DoneCount.ToString() & " / " & Progress.TotalCount.ToString() &
+                " textures complete (" & Percent.ToString() & "%)" & SkippedSummary
+
+            If Progress.ErrorMessage <> String.Empty AndAlso Not WorkHorse.IsBusy Then
+                QueueActivityLabel.Text = "Input issue · " & Progress.ErrorMessage
+                UiToolTip.SetToolTip(QueueActivityLabel, Progress.ErrorMessage)
+            ElseIf Not WorkHorse.IsBusy AndAlso RefreshSpandrelModelsButton.Enabled Then
                 If WatchDog.Enabled Then
-                    If TotalCount = 0 OrElse DoneCount >= TotalCount Then
+                    If Progress.TotalCount = 0 OrElse Progress.DoneCount >= Progress.TotalCount Then
                         QueueActivityLabel.Text = "Watching for new textures…"
                     Else
-                        QueueActivityLabel.Text = "Watching · " & (TotalCount - DoneCount).ToString() & " remaining"
+                        QueueActivityLabel.Text = "Watching · " & (Progress.TotalCount - Progress.DoneCount).ToString() & " remaining"
                     End If
-                ElseIf TotalCount = 0 Then
+                ElseIf Progress.TotalCount = 0 Then
                     QueueActivityLabel.Text = "Ready"
-                ElseIf DoneCount >= TotalCount Then
+                ElseIf Progress.DoneCount >= Progress.TotalCount Then
                     QueueActivityLabel.Text = "Complete"
                 Else
-                    QueueActivityLabel.Text = "Paused · " & (TotalCount - DoneCount).ToString() & " remaining"
+                    QueueActivityLabel.Text = "Paused · " & (Progress.TotalCount - Progress.DoneCount).ToString() & " remaining"
                 End If
             End If
         Catch ex As Exception
             ' A removable or network-backed input/output folder can disappear during a scan.
+        Finally
+            If Object.ReferenceEquals(ProgressScanCancellation, ScanCancellation) Then
+                ProgressScanCancellation = Nothing
+            End If
+            ScanCancellation.Dispose()
+            ProgressScanInFlight = False
+            If Not IsDisposed Then ProgressPollTimer.Interval = If(WorkHorse.IsBusy, 1000, 5000)
+            TryCompleteDeferredClose()
         End Try
-        ProgressPollTimer.Interval = If(WorkHorse.IsBusy, 1000, 5000)
     End Sub
 
-    Private Function GetOverallProgress(ByRef DoneCount As Integer, ByRef TotalCount As Integer,
-                                        ByRef UnsupportedCount As Integer, ByRef AlphaFilteredCount As Integer) As Integer
-        DoneCount = 0
-        TotalCount = 0
-        UnsupportedCount = 0
-        AlphaFilteredCount = 0
-        Dim SupportedExtensions As HashSet(Of String) = GetActiveInputFileTypes()
-        Dim AlphaMode As Integer = GetActiveAlphaMode()
-        For Each Profile As FormSettings.GamePathProfile In GetEffectiveGamePathProfiles()
-            If Not Directory.Exists(Profile.InputPath) OrElse Not Directory.Exists(Profile.OutputPath) Then Continue For
-            Dim AllInputFiles As String() = Directory.GetFiles(Profile.InputPath, "*.*", SearchOption.AllDirectories)
-            Dim ProfileUnsupportedCount As Integer = 0
-            Dim ProfileAlphaFilteredCount As Integer = 0
-            Dim SupportedCount As Integer = 0
-            Dim MissingCount As Integer = 0
-            Dim PendingFiles As String() = GetPendingInputFiles(AllInputFiles, Profile.OutputPath, SupportedExtensions, AlphaMode,
-                                                                  ProfileUnsupportedCount, ProfileAlphaFilteredCount, SupportedCount, MissingCount)
-            UnsupportedCount += ProfileUnsupportedCount
-            AlphaFilteredCount += ProfileAlphaFilteredCount
-            TotalCount += SupportedCount - ProfileAlphaFilteredCount
-            DoneCount += SupportedCount - MissingCount
+    Private Function GetOverallProgress(ProfilesToScan As List(Of FormSettings.GamePathProfile),
+                                        SupportedExtensions As HashSet(Of String), AlphaMode As Integer,
+                                        ScanToken As CancellationToken) As OverallProgressInfo
+        Dim Result As New OverallProgressInfo
+        For Each Profile As FormSettings.GamePathProfile In ProfilesToScan
+            If ScanToken.IsCancellationRequested Then Exit For
+            Try
+                If Not Directory.Exists(Profile.InputPath) OrElse Not Directory.Exists(Profile.OutputPath) Then Continue For
+                Dim AllInputFiles As String() = Directory.GetFiles(Profile.InputPath, "*.*", SearchOption.AllDirectories)
+                If ScanToken.IsCancellationRequested Then Exit For
+                Dim ProfileUnsupportedCount As Integer = 0
+                Dim ProfileAlphaFilteredCount As Integer = 0
+                Dim SupportedCount As Integer = 0
+                Dim MissingCount As Integer = 0
+                GetPendingInputFiles(AllInputFiles, Profile.OutputPath, SupportedExtensions, AlphaMode,
+                    ProfileUnsupportedCount, ProfileAlphaFilteredCount, SupportedCount, MissingCount)
+                Result.UnsupportedCount += ProfileUnsupportedCount
+                Result.AlphaFilteredCount += ProfileAlphaFilteredCount
+                Result.TotalCount += SupportedCount - ProfileAlphaFilteredCount
+                Result.DoneCount += SupportedCount - MissingCount
+            Catch ex As IOException
+                ' The folder can disappear while the background scan is running.
+            Catch ex As UnauthorizedAccessException
+                ' A game folder may not be readable by the current user.
+            Catch ex As Exception
+                If Result.ErrorMessage = String.Empty Then Result.ErrorMessage = ex.GetBaseException().Message
+            End Try
         Next
 
-        If TotalCount = 0 OrElse DoneCount <= 0 Then Return 0
-        If DoneCount >= TotalCount Then Return 100
-        Return CInt(Math.Floor((DoneCount * 100.0) / TotalCount))
+        If Result.TotalCount <= 0 OrElse Result.DoneCount <= 0 Then
+            Result.Percent = 0
+        ElseIf Result.DoneCount >= Result.TotalCount Then
+            Result.Percent = 100
+        Else
+            Result.Percent = CInt(Math.Floor((Result.DoneCount * 100.0) / Result.TotalCount))
+        End If
+        Return Result
     End Function
 
     Private Sub WorkHorse_DoWork(sender As Object, e As System.ComponentModel.DoWorkEventArgs) Handles WorkHorse.DoWork
-        WatchDog.Stop()
-        MakeUpscale()
-        If WorkHorse.CancellationPending = True Then
-            e.Cancel = True
-        End If
+        Try
+            If String.IsNullOrWhiteSpace(CurrentRunTempRoot) Then CurrentRunTempRoot = CreateRunTempRoot()
+            MakeUpscale()
+            If WorkHorse.CancellationPending = True Then e.Cancel = True
+        Finally
+            CleanupRunTemporaryRoot()
+        End Try
     End Sub
 
     Private Sub WorkHorse_ProgressChanged(sender As Object, e As System.ComponentModel.ProgressChangedEventArgs) Handles WorkHorse.ProgressChanged
@@ -1606,9 +1861,14 @@ Public Class Form1
 
     Private Sub WorkHorse_RunWorkerCompleted(sender As Object, e As System.ComponentModel.RunWorkerCompletedEventArgs) Handles WorkHorse.RunWorkerCompleted
         CurrentRunGamePaths = Nothing
-        If ChainControl.ListItems.Count = 0 Then
-            ChainList.Clear()
+        CleanupRunTemporaryRoot()
+        If ChainControl.ListItems.Count = 0 Then ChainList.Clear()
+
+        If CloseAfterWorkerCancellation Then
+            TryCompleteDeferredClose()
+            Return
         End If
+
         If e.Cancelled OrElse WatchDogButton.Text = "Stopping..." Then
             WatchDog.Stop()
             WatchDog.Enabled = False
@@ -1617,8 +1877,6 @@ Public Class Form1
             WatchDogButton.Enabled = True
             ClearAlphaSkipList()
             QueueActivityLabel.Text = "Cancelled"
-            Dim SingleRunPath As String = Path.Combine(Path.GetTempPath(), "Single_0")
-            If Directory.Exists(SingleRunPath) Then Directory.Delete(SingleRunPath, True)
             Exit Sub
         End If
         If e.Error IsNot Nothing Then
@@ -1630,8 +1888,6 @@ Public Class Form1
             ClearAlphaSkipList()
             QueueActivityLabel.Text = "Failed — see error details"
             UiToolTip.SetToolTip(QueueActivityLabel, e.Error.GetBaseException().Message)
-            Dim SingleRunPath As String = Path.Combine(Path.GetTempPath(), "Single_0")
-            If Directory.Exists(SingleRunPath) Then Directory.Delete(SingleRunPath, True)
             MessageBox.Show("Upscaling failed: " & e.Error.GetBaseException().Message, "AutoCrispy error", MessageBoxButtons.OK, MessageBoxIcon.Error)
             Exit Sub
         End If
@@ -1645,8 +1901,6 @@ Public Class Form1
             WatchDog.Enabled = False
             WatchDogButton.Text = "Running: False"
             WatchDogButton.Enabled = True
-            Dim SingleRunPath As String = Path.Combine(Path.GetTempPath(), "Single_0")
-            If Directory.Exists(SingleRunPath) Then Directory.Delete(SingleRunPath, True)
             SwitchGroups(True)
         End If
     End Sub
@@ -1684,7 +1938,8 @@ Public Class Form1
             CleanupUpscaleTemporaryFolders()
             Return
         End If
-        ' CopyFiles advances this cursor, so the outer loop must not also add a batch step.
+
+        Dim SuccessfullyProcessedInputs As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
         Dim CurrentIndex As Integer = 0
         Dim BatchLimit As Integer = ThreadCount
         If HasAutoTextureRouterInChain() Then BatchLimit = Math.Max(BatchLimit, Source.Length)
@@ -1703,19 +1958,26 @@ Public Class Form1
             Next
             ChainPaths.Add(LoadedSettings.Paths.OutputPath)
             Directory.CreateDirectory(TempPath)
-            CopyFiles(Source, TempPath, CurrentIndex, BatchLimit)
+            Dim CopiedInputs As New List(Of String)
+            CopyFiles(Source, TempPath, CurrentIndex, BatchLimit, CopiedInputs)
             If WorkHorse.CancellationPending Then
                 CleanupUpscaleTemporaryFolders()
                 Return
             End If
+
             Dim BatchFiles As String() = Directory.GetFiles(TempPath)
             Array.Sort(BatchFiles, StringComparer.OrdinalIgnoreCase)
+            Dim StageCounts As New Dictionary(Of String, Integer)(StringComparer.OrdinalIgnoreCase)
+            For Each CopiedInput As String In CopiedInputs
+                StageCounts(Path.GetFileNameWithoutExtension(CopiedInput)) = 0
+            Next
             Dim BatchDescription As String = "no images matched the current alpha settings"
             If BatchFiles.Length > 0 Then
                 BatchDescription = Path.GetFileName(BatchFiles(0))
                 If BatchFiles.Length > 1 Then BatchDescription &= " (+" & (BatchFiles.Length - 1).ToString() & " more)"
             End If
             WorkHorse.ReportProgress(0, "Prepared " & BatchFiles.Length.ToString() & " texture(s) for " & ProfileName & ": " & BatchDescription)
+
             Dim StageIndex As Integer = 0
             For Each Model In ChainList
                 StageIndex += 1
@@ -1727,51 +1989,86 @@ Public Class Form1
                 Dim NewImages As New List(Of String)
                 Dim DiffImages = GetMissingFiles(ChainPaths(0), LoadedSettings.Paths.OutputPath)
                 For Each NewImage As String In DiffImages
-                    Dim AcceptExt As Boolean = Model.Package.FileTypes.Contains(Path.GetExtension(NewImage).ToLower)
-                    If File.Exists(NewImage) AndAlso AcceptExt = True Then
+                    If WorkHorse.CancellationPending Then
+                        CleanupUpscaleTemporaryFolders()
+                        Return
+                    End If
+                    Dim AcceptExt As Boolean = Model.Package.FileTypes.Contains(Path.GetExtension(NewImage).ToLowerInvariant())
+                    If File.Exists(NewImage) AndAlso AcceptExt Then
                         NewImages.Add(NewImage)
-                        If LoadedSettings.BasicSettings.FixPS2 = True Then
-                            If (ChainList.IndexOf(Model) = 0 AndAlso Model.Name <> "TexConv") OrElse (ChainList(0).Name = "TexConv" AndAlso ChainList.IndexOf(Model) = 1) Then
+                        If LoadedSettings.BasicSettings.FixPS2 Then
+                            If (ChainList.IndexOf(Model) = 0 AndAlso Model.Name <> "TexConv") OrElse
+                                (ChainList(0).Name = "TexConv" AndAlso ChainList.IndexOf(Model) = 1) Then
                                 RemovePS2Alpha(NewImage)
                             End If
                         End If
-                        If LoadedSettings.ExpertSettings.SeamlessMode > 0 Then
-                            If (ChainList.IndexOf(Model) = 0 AndAlso Model.Name <> "TexConv") OrElse (ChainList(0).Name = "TexConv" AndAlso ChainList.IndexOf(Model) = 1) Then
-                                Dim SeamlessImage As Bitmap = GetUnlockedImage(NewImage)
-                                SeamlessImage = MakeSeamless(SeamlessImage, LoadedSettings.ExpertSettings.SeamlessMode, LoadedSettings.ExpertSettings.SeamlessMargin)
-                                SeamlessImage.Save(NewImage)
-                            End If
+                        If WorkHorse.CancellationPending Then
+                            CleanupUpscaleTemporaryFolders()
+                            Return
+                        End If
+                        If LoadedSettings.ExpertSettings.SeamlessMode > 0 AndAlso
+                            ((ChainList.IndexOf(Model) = 0 AndAlso Model.Name <> "TexConv") OrElse
+                             (ChainList(0).Name = "TexConv" AndAlso ChainList.IndexOf(Model) = 1)) Then
+                            Using SeamlessSource As Bitmap = GetUnlockedImage(NewImage)
+                                Using SeamlessImage As Bitmap = MakeSeamless(SeamlessSource,
+                                    LoadedSettings.ExpertSettings.SeamlessMode, LoadedSettings.ExpertSettings.SeamlessMargin)
+                                    If Not WorkHorse.CancellationPending Then SeamlessImage.Save(NewImage)
+                                End Using
+                            End Using
                         End If
                     End If
                 Next
+
                 StartBuilder(ChainPaths(0), ChainPaths(1), NewImages, Model)
                 If WorkHorse.CancellationPending Then
                     CleanupUpscaleTemporaryFolders()
                     Return
                 End If
+                For Each ProcessedImage As String In NewImages
+                    Dim Stem As String = Path.GetFileNameWithoutExtension(ProcessedImage)
+                    If StageCounts.ContainsKey(Stem) Then StageCounts(Stem) += 1
+                Next
+
                 DeletedChainPaths.Add(ChainPaths(0))
                 ChainPaths.RemoveAt(0)
-                If (ChainList.IndexOf(Model) = ChainList.Count - 1 AndAlso Model.Name <> "TexConv") OrElse (ChainList(ChainList.Count - 1).Name = "TexConv" AndAlso ChainList.IndexOf(Model) = ChainList.Count - 2) Then
-                    If LoadedSettings.BasicSettings.Defringe = True Then
-                        For Each NewImage In NewImages
-                            If File.Exists(ChainPaths(0) & "\" & Path.GetFileName(NewImage)) Then Defringe(ChainPaths(0) & "\" & Path.GetFileName(NewImage), LoadedSettings.BasicSettings.DefringeThreshold)
+                If (ChainList.IndexOf(Model) = ChainList.Count - 1 AndAlso Model.Name <> "TexConv") OrElse
+                    (ChainList(ChainList.Count - 1).Name = "TexConv" AndAlso ChainList.IndexOf(Model) = ChainList.Count - 2) Then
+                    If LoadedSettings.BasicSettings.Defringe Then
+                        For Each NewImage As String In NewImages
+                            If WorkHorse.CancellationPending Then
+                                CleanupUpscaleTemporaryFolders()
+                                Return
+                            End If
+                            Dim OutputImage As String = Path.Combine(ChainPaths(0), Path.GetFileName(NewImage))
+                            If File.Exists(OutputImage) Then Defringe(OutputImage, LoadedSettings.BasicSettings.DefringeThreshold)
                         Next
                     End If
                     If LoadedSettings.ExpertSettings.SeamlessMode > 0 Then
-                        For Each NewImage In NewImages
-                            If File.Exists(ChainPaths(0) & "\" & Path.GetFileName(NewImage)) Then
+                        For Each NewImage As String In NewImages
+                            If WorkHorse.CancellationPending Then
+                                CleanupUpscaleTemporaryFolders()
+                                Return
+                            End If
+                            Dim OutputImage As String = Path.Combine(ChainPaths(0), Path.GetFileName(NewImage))
+                            If File.Exists(OutputImage) Then
                                 Dim ScaleVal As Integer = LoadedSettings.ExpertSettings.SeamlessScale * LoadedSettings.ExpertSettings.SeamlessMargin
-                                Dim CroppedImage As Bitmap = GetUnlockedImage(ChainPaths(0) & "\" & Path.GetFileName(NewImage))
-                                CroppedImage = CropImage(CroppedImage, ScaleVal, ScaleVal, CroppedImage.Width - (ScaleVal * 2), CroppedImage.Height - (ScaleVal * 2), 0)
-                                CroppedImage.Save(ChainPaths(0) & "\" & Path.GetFileName(NewImage))
+                                Using CroppedSource As Bitmap = GetUnlockedImage(OutputImage)
+                                    Using CroppedImage As Bitmap = CropImage(CroppedSource, ScaleVal, ScaleVal,
+                                        CroppedSource.Width - (ScaleVal * 2), CroppedSource.Height - (ScaleVal * 2), 0)
+                                        If Not WorkHorse.CancellationPending Then CroppedImage.Save(OutputImage)
+                                    End Using
+                                End Using
                             End If
                         Next
                     End If
-                    If LoadedSettings.BasicSettings.FixPS2 = True Then
-                        For Each NewImage In NewImages
-                            If File.Exists(ChainPaths(0) & "\" & Path.GetFileName(NewImage)) Then
-                                AddPS2Alpha(ChainPaths(0) & "\" & Path.GetFileName(NewImage))
+                    If LoadedSettings.BasicSettings.FixPS2 Then
+                        For Each NewImage As String In NewImages
+                            If WorkHorse.CancellationPending Then
+                                CleanupUpscaleTemporaryFolders()
+                                Return
                             End If
+                            Dim OutputImage As String = Path.Combine(ChainPaths(0), Path.GetFileName(NewImage))
+                            If File.Exists(OutputImage) Then AddPS2Alpha(OutputImage)
                         Next
                     End If
                 End If
@@ -1780,18 +2077,35 @@ Public Class Form1
                     Return
                 End If
             Next
+
             For Each ChainDir As String In DeletedChainPaths
-                Directory.Delete(ChainDir, True)
+                If Directory.Exists(ChainDir) Then Directory.Delete(ChainDir, True)
+            Next
+            Dim FinalOutputExtensions As HashSet(Of String) = Nothing
+            If ChainList.Count > 0 Then FinalOutputExtensions = GetPackageInputFileTypes(ChainList(ChainList.Count - 1).Package)
+            Dim FinalOutputs As Dictionary(Of String, String) = GetNonEmptyOutputsByStem(
+                LoadedSettings.Paths.OutputPath, FinalOutputExtensions)
+            For Each CopiedInput As String In CopiedInputs
+                Dim Stem As String = Path.GetFileNameWithoutExtension(CopiedInput)
+                Dim CompletedStages As Integer = 0
+                If ChainList.Count > 0 AndAlso StageCounts.TryGetValue(Stem, CompletedStages) AndAlso
+                    CompletedStages = ChainList.Count AndAlso FinalOutputs.ContainsKey(Stem) Then
+                    SuccessfullyProcessedInputs.Add(Path.GetFullPath(CopiedInput))
+                End If
             Next
 
-            ' Keep BackgroundWorker progress within its valid range; the progress poller reads
-            ' overall completion from the input/output folders instead of this batch percentage.
             Dim ProgressPercentage As Integer = CInt(Math.Floor((CurrentIndex * 100.0) / Source.Count))
             WorkHorse.ReportProgress(Math.Max(0, Math.Min(100, ProgressPercentage)))
         End While
-        If CleanupCheckBox.Checked = True Then
-            For Each SourceImage As String In Source
-                File.Delete(SourceImage)
+
+        If WorkHorse.CancellationPending Then
+            CleanupUpscaleTemporaryFolders()
+            Return
+        End If
+        If LoadedSettings.ExpertSettings.ClearInput Then
+            For Each SourceImage As String In SuccessfullyProcessedInputs
+                If WorkHorse.CancellationPending Then Return
+                If File.Exists(SourceImage) Then File.Delete(SourceImage)
             Next
         End If
     End Sub
@@ -1811,7 +2125,8 @@ Public Class Form1
         Return False
     End Function
 
-    Private Sub CopyFiles(FileList As String(), RootPath As String, ByRef CurrentIndex As Integer, BatchSize As Integer)
+    Private Sub CopyFiles(FileList As String(), RootPath As String, ByRef CurrentIndex As Integer,
+                          BatchSize As Integer, CopiedInputs As List(Of String))
         Dim CopyCounter As Integer = 0
         Dim AlphaMode As Integer = LoadedSettings.ExpertSettings.AlphaMode
         Do While CurrentIndex < FileList.Count AndAlso CopyCounter < BatchSize AndAlso Not WorkHorse.CancellationPending
@@ -1819,20 +2134,25 @@ Public Class Form1
             If Not IsAlphaFiltered(FilePath, AlphaMode) Then
                 Select Case AlphaMode
                     Case 0
-                        File.Copy(FilePath, RootPath & "\" & Path.GetFileName(FilePath), True)
+                        File.Copy(FilePath, Path.Combine(RootPath, Path.GetFileName(FilePath)), True)
+                        CopiedInputs.Add(FilePath)
                         CopyCounter += 1
                     Case 1
                         If Not GetHasTransparency(FilePath) Then
-                            File.Copy(FilePath, RootPath & "\" & Path.GetFileName(FilePath), True)
+                            If WorkHorse.CancellationPending Then Exit Do
+                            File.Copy(FilePath, Path.Combine(RootPath, Path.GetFileName(FilePath)), True)
+                            CopiedInputs.Add(FilePath)
                             CopyCounter += 1
                         Else
                             MarkAlphaFiltered(FilePath, AlphaMode)
                         End If
                     Case 2
                         If GetHasTransparency(FilePath) Then
-                            File.Copy(FilePath, RootPath & "\" & Path.GetFileName(FilePath), True)
+                            If WorkHorse.CancellationPending Then Exit Do
+                            File.Copy(FilePath, Path.Combine(RootPath, Path.GetFileName(FilePath)), True)
+                            CopiedInputs.Add(FilePath)
                             CopyCounter += 1
-                        Else
+                        ElseIf Not WorkHorse.CancellationPending Then
                             MarkAlphaFiltered(FilePath, AlphaMode)
                         End If
                 End Select
@@ -1849,7 +2169,9 @@ Public Class Form1
         Dim IsAutoRouteRun As Boolean = IsSpandrelBackend AndAlso
             TypeOf Model.Package Is FormSettings.PythonPackage AndAlso
             DirectCast(Model.Package, FormSettings.PythonPackage).AutoRouteEnabled
-        Dim BackendDisplay As String = If(Model.PackageType = DAT2BackendName, "DAT2", If(Model.PackageType = SpandrelBackendName, "Spandrel", "RealPLKSR"))
+        Dim BackendDisplay As String = If(IsSpandrelBackend, "Spandrel", Model.PackageType)
+        Dim ExpectedOutputExtensions As HashSet(Of String) = GetExpectedOutputExtensions(ImageList, Model.Package)
+        Dim ProtectedOutputPaths As HashSet(Of String) = GetExistingOutputPaths(DestPath, ImageList, ExpectedOutputExtensions)
         If Model.PackageType = "ESRGAN" OrElse IsSpandrelBackend OrElse Model.PackageType.Contains("Vulkan") Then
             If IsSpandrelBackend Then
                 Dim PythonExecutable As String = FindPythonExecutable()
@@ -1866,95 +2188,263 @@ Public Class Form1
                 BuildProcess = New ProcessStartInfo(Root & Model.FileLocation, MakeCommand(SourcePath, DestPath, Model.PackageType, Model.Package))
                 BuildProcess.WorkingDirectory = Directory.GetParent(Root & Model.FileLocation).FullName
             End If
-            BuildProcess.RedirectStandardOutput = True
-            BuildProcess.RedirectStandardError = True
-            BuildProcess.UseShellExecute = False
-            BuildProcess.CreateNoWindow = True
-            Dim BatchProcess As Process = Process.Start(BuildProcess)
-            If BatchProcess Is Nothing Then Throw New InvalidOperationException("Failed to start " & BackendDisplay & ".")
-            RegisterActiveProcess(BatchProcess)
+            ConfigureCapturedProcess(BuildProcess)
+            Dim Capture As ProcessOutputCapture = StartCapturedProcess(BuildProcess, BackendDisplay, LoadedSettings.Paths.OutputPath,
+                                                                       If(IsSpandrelBackend, Nothing, ImageList(0)), IsSpandrelBackend)
             Try
-                If IsSpandrelBackend Then
-                    Dim StandardOutputTask = Task.Run(Function() ReadSpandrelOutput(BatchProcess))
-                    Dim StandardErrorTask = BatchProcess.StandardError.ReadToEndAsync()
-                    WaitForActiveProcess(BatchProcess)
-                    Dim StandardOutput As String = StandardOutputTask.Result
-                    Dim StandardError As String = StandardErrorTask.Result
-                    If WorkHorse.CancellationPending Then
-                        DeleteCancelledOutputs(DestPath, ImageList)
-                        Return
-                    End If
-                    If LoadedSettings.ExpertSettings.Logging OrElse IsAutoRouteRun OrElse BatchProcess.ExitCode <> 0 Then
-                        WriteProcessLog(BuildProcess, StandardOutput, StandardError, LoadedSettings.Paths.OutputPath, Model.PackageType, BatchProcess.ExitCode)
-                    End If
-                    If BatchProcess.ExitCode <> 0 Then
-                        Dim Details As String = If(StandardError.Trim() <> "", StandardError.Trim(), StandardOutput.Trim())
-                        If Details.Length > 2000 Then Details = Details.Substring(0, 2000) & "..."
-                        Throw New InvalidOperationException(BackendDisplay & " inference failed (exit code " & BatchProcess.ExitCode.ToString() & "). " & Details)
-                    End If
-                Else
-                    WaitForActiveProcess(BatchProcess)
-                    If WorkHorse.CancellationPending Then
-                        DeleteCancelledOutputs(DestPath, ImageList)
-                        Return
-                    End If
-                    If LoadedSettings.ExpertSettings.Logging = True Then
-                        WriteLog(BatchProcess, LoadedSettings.Paths.OutputPath)
-                    End If
+                CompleteCapturedProcess(Capture)
+                If WorkHorse.CancellationPending Then
+                    DeleteCancelledOutputs(DestPath, ImageList, ExpectedOutputExtensions, ProtectedOutputPaths)
+                    Return
                 End If
+                If LoadedSettings.ExpertSettings.Logging OrElse IsAutoRouteRun OrElse Capture.ExitCode <> 0 Then
+                    WriteProcessLog(Capture.StartInfo, Capture.StandardOutput, Capture.StandardError,
+                                    Capture.SaveLocation, Capture.BackendName, Capture.ExitCode)
+                End If
+                If Capture.ExitCode <> 0 Then
+                    DeleteOutputsForInputs(DestPath, ImageList, ExpectedOutputExtensions, ProtectedOutputPaths)
+                    Throw CreateBackendFailure(Capture)
+                End If
+                Try
+                    ValidateBuilderOutputs(DestPath, ImageList, BackendDisplay, Model.Package)
+                Catch
+                    DeleteOutputsForInputs(DestPath, ImageList, ExpectedOutputExtensions, ProtectedOutputPaths)
+                    Throw
+                End Try
+            Catch
+                If Not Capture.ActiveProcess.HasExited Then TerminateProcessTree(Capture.ActiveProcess)
+                Throw
             Finally
-                UnregisterActiveProcess(BatchProcess)
-                BatchProcess.Dispose()
+                UnregisterActiveProcess(Capture.ActiveProcess)
+                Capture.ActiveProcess.Dispose()
             End Try
         Else
-            Dim ProcessBag As New List(Of Process)
+            Dim Captures As New List(Of ProcessOutputCapture)
             Try
-                For j = 0 To ImageList.Count - 1
+                For Each ImagePath As String In ImageList
                     If WorkHorse.CancellationPending Then
                         StopActiveProcesses()
                         Exit For
                     End If
-                    Dim NewImage As String = DestPath & "\" & Path.GetFileName(ImageList(j))
-                    BuildProcess = New ProcessStartInfo(Root & Model.FileLocation, MakeCommand(ImageList(j), NewImage, Model.PackageType, Model.Package))
+                    Dim NewImage As String = Path.Combine(DestPath, Path.GetFileName(ImagePath))
+                    BuildProcess = New ProcessStartInfo(Root & Model.FileLocation,
+                        MakeCommand(ImagePath, NewImage, Model.PackageType, Model.Package))
                     BuildProcess.WorkingDirectory = Directory.GetParent(Root & Model.FileLocation).FullName
-                    BuildProcess.RedirectStandardOutput = True
-                    BuildProcess.RedirectStandardError = True
-                    BuildProcess.UseShellExecute = False
-                    BuildProcess.CreateNoWindow = True
-                    Dim BatchProcess As Process = Process.Start(BuildProcess)
-                    If BatchProcess Is Nothing Then Throw New InvalidOperationException("Failed to start " & Model.PackageType & ".")
-                    ProcessBag.Add(BatchProcess)
-                    RegisterActiveProcess(BatchProcess)
-                    If LoadedSettings.ExpertSettings.Logging = True Then
-                        WriteLog(BatchProcess, LoadedSettings.Paths.OutputPath)
-                    End If
+                    ConfigureCapturedProcess(BuildProcess)
+                    Captures.Add(StartCapturedProcess(BuildProcess, BackendDisplay, LoadedSettings.Paths.OutputPath, ImagePath, False))
                 Next
 
-                Do
-                    If WorkHorse.CancellationPending Then StopActiveProcesses()
-                    Dim AnyProcessRunning As Boolean = False
-                    For Each Job As Process In ProcessBag
-                        If Not Job.HasExited Then AnyProcessRunning = True
-                    Next
-                    If Not AnyProcessRunning Then Exit Do
-                    Threading.Thread.Sleep(50)
-                Loop
-
+                If WorkHorse.CancellationPending Then StopActiveProcesses()
+                For Each Capture As ProcessOutputCapture In Captures
+                    CompleteCapturedProcess(Capture)
+                Next
                 If WorkHorse.CancellationPending Then
-                    DeleteCancelledOutputs(DestPath, ImageList)
+                    DeleteCancelledOutputs(DestPath, ImageList, ExpectedOutputExtensions, ProtectedOutputPaths)
                     Return
                 End If
+
+                Dim FailureDetails As New List(Of String)
+                For Each Capture As ProcessOutputCapture In Captures
+                    If LoadedSettings.ExpertSettings.Logging OrElse Capture.ExitCode <> 0 Then
+                        WriteProcessLog(Capture.StartInfo, Capture.StandardOutput, Capture.StandardError,
+                                        Capture.SaveLocation, Capture.BackendName, Capture.ExitCode)
+                    End If
+                    If Capture.ExitCode <> 0 Then
+                        FailureDetails.Add(CreateBackendFailure(Capture).Message)
+                    End If
+                Next
+                If FailureDetails.Count > 0 Then
+                    DeleteOutputsForInputs(DestPath, ImageList, ExpectedOutputExtensions, ProtectedOutputPaths)
+                    Throw New InvalidOperationException(String.Join(Environment.NewLine, FailureDetails.ToArray()))
+                End If
+                Try
+                    ValidateBuilderOutputs(DestPath, ImageList, BackendDisplay, Model.Package)
+                Catch
+                    DeleteOutputsForInputs(DestPath, ImageList, ExpectedOutputExtensions, ProtectedOutputPaths)
+                    Throw
+                End Try
+            Catch
+                StopAndWaitForCapturedProcesses(Captures)
+                Throw
             Finally
-                For Each Job As Process In ProcessBag
-                    UnregisterActiveProcess(Job)
-                    Job.Dispose()
+                For Each Capture As ProcessOutputCapture In Captures
+                    UnregisterActiveProcess(Capture.ActiveProcess)
+                    Capture.ActiveProcess.Dispose()
                 Next
             End Try
         End If
 
+        If WorkHorse.CancellationPending Then Return
         For Each TempImage As String In Directory.GetFiles(SourcePath)
+            If WorkHorse.CancellationPending Then Return
             File.Delete(TempImage)
         Next
+    End Sub
+
+    Private Sub ConfigureCapturedProcess(StartInfo As ProcessStartInfo)
+        StartInfo.RedirectStandardOutput = True
+        StartInfo.RedirectStandardError = True
+        StartInfo.UseShellExecute = False
+        StartInfo.CreateNoWindow = True
+    End Sub
+
+    Private Function StartCapturedProcess(StartInfo As ProcessStartInfo, BackendName As String, SaveLocation As String,
+                                          InputPath As String, ParseProgress As Boolean) As ProcessOutputCapture
+        Dim ActiveProcess As Process = Process.Start(StartInfo)
+        If ActiveProcess Is Nothing Then Throw New InvalidOperationException("Failed to start " & BackendName & ".")
+        Dim OutputTask As Task(Of String) = Nothing
+        Dim ErrorTask As Task(Of String) = Nothing
+        Try
+            RegisterActiveProcess(ActiveProcess)
+            If ParseProgress Then
+                OutputTask = Task.Run(Function() ReadSpandrelOutput(ActiveProcess))
+            Else
+                OutputTask = ActiveProcess.StandardOutput.ReadToEndAsync()
+            End If
+            ErrorTask = ActiveProcess.StandardError.ReadToEndAsync()
+            Return New ProcessOutputCapture With {
+                .ActiveProcess = ActiveProcess,
+                .StartInfo = StartInfo,
+                .StandardOutputTask = OutputTask,
+                .StandardErrorTask = ErrorTask,
+                .BackendName = BackendName,
+                .SaveLocation = SaveLocation,
+                .InputPath = InputPath
+            }
+        Catch
+            TerminateProcessTree(ActiveProcess)
+            Try
+                If Not ActiveProcess.HasExited Then ActiveProcess.WaitForExit(3000)
+            Catch ex As Exception
+                System.Diagnostics.Debug.WriteLine("Could not wait for failed backend startup: " & ex.Message)
+            End Try
+            WaitForCapturedStreamTask(OutputTask)
+            WaitForCapturedStreamTask(ErrorTask)
+            UnregisterActiveProcess(ActiveProcess)
+            ActiveProcess.Dispose()
+            Throw
+        End Try
+    End Function
+
+    Private Sub CompleteCapturedProcess(Capture As ProcessOutputCapture)
+        WaitForActiveProcess(Capture.ActiveProcess)
+        Capture.StandardOutput = Capture.StandardOutputTask.Result
+        Capture.StandardError = Capture.StandardErrorTask.Result
+        Capture.ExitCode = Capture.ActiveProcess.ExitCode
+    End Sub
+
+    Private Function CreateBackendFailure(Capture As ProcessOutputCapture) As InvalidOperationException
+        Dim Details As String = If(Capture.StandardError.Trim() <> String.Empty,
+                                   Capture.StandardError.Trim(), Capture.StandardOutput.Trim())
+        If Details.Length > 2000 Then Details = Details.Substring(0, 2000) & "..."
+        Dim InputDescription As String = If(String.IsNullOrWhiteSpace(Capture.InputPath),
+                                            String.Empty, " for " & Path.GetFileName(Capture.InputPath))
+        Return New InvalidOperationException(Capture.BackendName & InputDescription &
+            " failed (exit code " & Capture.ExitCode.ToString() & "). " & Details)
+    End Function
+
+    Private Function GetExpectedOutputExtensions(ImageList As List(Of String), Package As Object) As HashSet(Of String)
+        Dim Result As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+        Dim PackageExtensions As HashSet(Of String) = GetPackageInputFileTypes(Package)
+        If PackageExtensions IsNot Nothing Then Result.UnionWith(PackageExtensions)
+        For Each InputImage As String In ImageList
+            Result.Add(Path.GetExtension(InputImage))
+        Next
+        Return Result
+    End Function
+
+    Private Sub ValidateBuilderOutputs(DestPath As String, ImageList As List(Of String), BackendName As String, Package As Object)
+        Dim ExpectedExtensions As HashSet(Of String) = GetExpectedOutputExtensions(ImageList, Package)
+        Dim OutputsByStem As Dictionary(Of String, String) = GetNonEmptyOutputsByStem(DestPath, ExpectedExtensions)
+        For Each InputImage As String In ImageList
+            If WorkHorse.CancellationPending Then Return
+            If Not OutputsByStem.ContainsKey(Path.GetFileNameWithoutExtension(InputImage)) Then
+                Throw New InvalidOperationException(BackendName & " exited successfully but produced no non-empty image output for " &
+                    Path.GetFileName(InputImage) & ". The source was preserved.")
+            End If
+        Next
+    End Sub
+
+    Private Function GetNonEmptyOutputsByStem(OutputFolder As String,
+                                              Optional AllowedExtensions As HashSet(Of String) = Nothing) As Dictionary(Of String, String)
+        Dim Result As New Dictionary(Of String, String)(StringComparer.OrdinalIgnoreCase)
+        If Not Directory.Exists(OutputFolder) Then Return Result
+        For Each Candidate As String In Directory.GetFiles(OutputFolder, "*.*", SearchOption.AllDirectories)
+            If AllowedExtensions IsNot Nothing AndAlso AllowedExtensions.Count > 0 AndAlso
+                Not AllowedExtensions.Contains(Path.GetExtension(Candidate)) Then Continue For
+            Dim Stem As String = Path.GetFileNameWithoutExtension(Candidate)
+            If Result.ContainsKey(Stem) Then Continue For
+            Try
+                If New FileInfo(Candidate).Length > 0 Then Result.Add(Stem, Candidate)
+            Catch ex As IOException
+                ' An output may be replaced while a watcher is scanning.
+            Catch ex As UnauthorizedAccessException
+                ' Ignore outputs we cannot inspect and keep searching.
+            End Try
+        Next
+        Return Result
+    End Function
+
+    Private Function GetExistingOutputPaths(OutputFolder As String, ImageList As List(Of String),
+                                            AllowedExtensions As HashSet(Of String)) As HashSet(Of String)
+        Dim Result As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+        If Not Directory.Exists(OutputFolder) Then Return Result
+        Dim InputStems As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+        For Each ImagePath As String In ImageList
+            InputStems.Add(Path.GetFileNameWithoutExtension(ImagePath))
+        Next
+        For Each Candidate As String In Directory.GetFiles(OutputFolder, "*.*", SearchOption.AllDirectories)
+            If InputStems.Contains(Path.GetFileNameWithoutExtension(Candidate)) AndAlso
+                (AllowedExtensions Is Nothing OrElse AllowedExtensions.Count = 0 OrElse
+                 AllowedExtensions.Contains(Path.GetExtension(Candidate))) Then
+                Result.Add(Path.GetFullPath(Candidate))
+            End If
+        Next
+        Return Result
+    End Function
+
+    Private Sub DeleteOutputsForInputs(DestPath As String, ImageList As IEnumerable(Of String),
+                                       AllowedExtensions As HashSet(Of String), ProtectedOutputPaths As HashSet(Of String))
+        If Not Directory.Exists(DestPath) Then Return
+        Dim Stems As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+        For Each ImagePath As String In ImageList
+            Stems.Add(Path.GetFileNameWithoutExtension(ImagePath))
+        Next
+        For Each Candidate As String In Directory.GetFiles(DestPath, "*.*", SearchOption.AllDirectories)
+            If Not Stems.Contains(Path.GetFileNameWithoutExtension(Candidate)) Then Continue For
+            If AllowedExtensions IsNot Nothing AndAlso AllowedExtensions.Count > 0 AndAlso
+                Not AllowedExtensions.Contains(Path.GetExtension(Candidate)) Then Continue For
+            If ProtectedOutputPaths IsNot Nothing AndAlso ProtectedOutputPaths.Contains(Path.GetFullPath(Candidate)) Then Continue For
+            Try
+                File.Delete(Candidate)
+            Catch ex As Exception
+                System.Diagnostics.Debug.WriteLine("Could not remove incomplete backend output: " & ex.Message)
+            End Try
+        Next
+    End Sub
+
+    Private Sub StopAndWaitForCapturedProcesses(Captures As List(Of ProcessOutputCapture))
+        For Each Capture As ProcessOutputCapture In Captures
+            Try
+                TerminateProcessTree(Capture.ActiveProcess)
+                If Not Capture.ActiveProcess.HasExited Then Capture.ActiveProcess.WaitForExit(3000)
+            Catch ex As Exception
+                System.Diagnostics.Debug.WriteLine("Could not stop backend process: " & ex.Message)
+            End Try
+            WaitForCapturedStreamTask(Capture.StandardOutputTask)
+            WaitForCapturedStreamTask(Capture.StandardErrorTask)
+        Next
+    End Sub
+
+    Private Sub WaitForCapturedStreamTask(StreamTask As Task)
+        If StreamTask Is Nothing Then Return
+        Try
+            StreamTask.Wait(5000)
+        Catch ex As AggregateException
+            System.Diagnostics.Debug.WriteLine("Could not finish captured backend output: " & ex.GetBaseException().Message)
+        Catch ex As Exception
+            System.Diagnostics.Debug.WriteLine("Could not finish captured backend output: " & ex.Message)
+        End Try
     End Sub
 
     Private Function ReadSpandrelOutput(SpandrelProcess As Process) As String
@@ -1974,32 +2464,146 @@ Public Class Form1
     End Function
 
     Private Sub RegisterActiveProcess(ActiveProcess As Process)
+        Dim JobHandle As IntPtr = CreateKillOnCloseJob()
+        If JobHandle <> IntPtr.Zero Then
+            Try
+                If AssignProcessToJobObject(JobHandle, ActiveProcess.Handle) Then
+                    SyncLock ActiveProcessLock
+                        ProcessJobHandles(ActiveProcess) = JobHandle
+                    End SyncLock
+                Else
+                    CloseHandle(JobHandle)
+                    System.Diagnostics.Debug.WriteLine("Could not assign process to a kill-on-close job object; taskkill fallback will be used.")
+                End If
+            Catch ex As Exception
+                CloseHandle(JobHandle)
+                System.Diagnostics.Debug.WriteLine("Could not create process job membership: " & ex.Message)
+            End Try
+        End If
+
         SyncLock ActiveProcessLock
             ActiveProcesses.Add(ActiveProcess)
         End SyncLock
-        ' Cancellation can arrive between Process.Start and registration. Recheck here
-        ' so that a process created in that window is terminated before we wait on it.
         If WorkHorse.CancellationPending Then StopActiveProcesses()
     End Sub
 
+    Private Function CreateKillOnCloseJob() As IntPtr
+        Dim JobHandle As IntPtr = IntPtr.Zero
+        Dim InfoPointer As IntPtr = IntPtr.Zero
+        Try
+            JobHandle = CreateJobObject(IntPtr.Zero, Nothing)
+            If JobHandle = IntPtr.Zero Then Return IntPtr.Zero
+            Dim Info As New JobObjectExtendedLimitInformation
+            Info.BasicLimitInformation.LimitFlags = &H2000UI ' JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            Dim InfoSize As Integer = Runtime.InteropServices.Marshal.SizeOf(GetType(JobObjectExtendedLimitInformation))
+            InfoPointer = Runtime.InteropServices.Marshal.AllocHGlobal(InfoSize)
+            Runtime.InteropServices.Marshal.StructureToPtr(Info, InfoPointer, False)
+            If Not SetInformationJobObject(JobHandle, 9, InfoPointer, CUInt(InfoSize)) Then
+                CloseHandle(JobHandle)
+                Return IntPtr.Zero
+            End If
+            Return JobHandle
+        Catch ex As Exception
+            If JobHandle <> IntPtr.Zero Then CloseHandle(JobHandle)
+            System.Diagnostics.Debug.WriteLine("Could not configure process job object: " & ex.Message)
+            Return IntPtr.Zero
+        Finally
+            If InfoPointer <> IntPtr.Zero Then Runtime.InteropServices.Marshal.FreeHGlobal(InfoPointer)
+        End Try
+    End Function
+
     Private Sub UnregisterActiveProcess(ActiveProcess As Process)
+        Dim JobHandle As IntPtr = IntPtr.Zero
         SyncLock ActiveProcessLock
             ActiveProcesses.Remove(ActiveProcess)
+            ProcessesBeingTerminated.Remove(ActiveProcess)
+            If ProcessJobHandles.TryGetValue(ActiveProcess, JobHandle) Then ProcessJobHandles.Remove(ActiveProcess)
         End SyncLock
+        If JobHandle <> IntPtr.Zero Then
+            ' Closing a kill-on-close job also reaps any descendants the backend left running.
+            If Not CloseHandle(JobHandle) Then
+                System.Diagnostics.Debug.WriteLine("Could not close backend job handle: " & Runtime.InteropServices.Marshal.GetLastWin32Error().ToString())
+            End If
+        End If
     End Sub
 
     Private Sub StopActiveProcesses()
         Dim ProcessesToStop As New List(Of Process)
         SyncLock ActiveProcessLock
-            ProcessesToStop.AddRange(ActiveProcesses)
+            For Each ActiveProcess As Process In ActiveProcesses
+                If ProcessesBeingTerminated.Add(ActiveProcess) Then ProcessesToStop.Add(ActiveProcess)
+            Next
         End SyncLock
         For Each ActiveProcess As Process In ProcessesToStop
-            Try
-                If Not ActiveProcess.HasExited Then ActiveProcess.Kill()
-            Catch ex As Exception
-                ' A process may exit between HasExited and Kill.
-            End Try
+            Dim ProcessToStop As Process = ActiveProcess
+            Task.Run(Sub()
+                         Try
+                             TerminateProcessTree(ProcessToStop)
+                         Catch ex As Exception
+                             System.Diagnostics.Debug.WriteLine("Could not terminate backend process tree: " & ex.Message)
+                         Finally
+                             SyncLock ActiveProcessLock
+                                 ProcessesBeingTerminated.Remove(ProcessToStop)
+                             End SyncLock
+                         End Try
+                     End Sub)
         Next
+    End Sub
+
+    Private Sub TerminateProcessTree(ActiveProcess As Process)
+        Dim JobHandle As IntPtr = IntPtr.Zero
+        SyncLock ActiveProcessLock
+            ProcessJobHandles.TryGetValue(ActiveProcess, JobHandle)
+        End SyncLock
+
+        Dim JobTerminated As Boolean = False
+        If JobHandle <> IntPtr.Zero Then
+            Try
+                JobTerminated = TerminateJobObject(JobHandle, 1UI)
+                If Not JobTerminated Then
+                    System.Diagnostics.Debug.WriteLine("Could not terminate backend job: " & Runtime.InteropServices.Marshal.GetLastWin32Error().ToString())
+                End If
+            Catch ex As Exception
+                System.Diagnostics.Debug.WriteLine("Could not terminate backend job: " & ex.Message)
+            End Try
+        End If
+
+        If Not JobTerminated Then
+            Try
+                If Not ActiveProcess.HasExited Then
+                    Dim TaskKillPath As String = Path.Combine(Environment.SystemDirectory, "taskkill.exe")
+                    If File.Exists(TaskKillPath) Then
+                        Using TreeKiller As New Process
+                            TreeKiller.StartInfo = New ProcessStartInfo With {
+                                .FileName = TaskKillPath,
+                                .Arguments = "/PID " & ActiveProcess.Id.ToString(CultureInfo.InvariantCulture) & " /T /F",
+                                .UseShellExecute = False,
+                                .CreateNoWindow = True
+                            }
+                            If TreeKiller.Start() Then
+                                If Not TreeKiller.WaitForExit(5000) Then
+                                    Try
+                                        TreeKiller.Kill()
+                                    Catch ex As Exception
+                                        System.Diagnostics.Debug.WriteLine("Could not stop taskkill helper: " & ex.Message)
+                                    End Try
+                                End If
+                            End If
+                        End Using
+                    End If
+                End If
+            Catch ex As Exception
+                System.Diagnostics.Debug.WriteLine("taskkill process-tree fallback failed: " & ex.Message)
+            End Try
+        End If
+        Try
+            If Not ActiveProcess.HasExited Then
+                ActiveProcess.Kill()
+                ActiveProcess.WaitForExit(3000)
+            End If
+        Catch ex As Exception
+            System.Diagnostics.Debug.WriteLine("Could not terminate backend process: " & ex.Message)
+        End Try
     End Sub
 
     Private Sub WaitForActiveProcess(ActiveProcess As Process)
@@ -2008,32 +2612,32 @@ Public Class Form1
         End While
     End Sub
 
-    Private Sub DeleteCancelledOutputs(DestPath As String, ImageList As List(Of String))
-        For Each ImagePath As String In ImageList
-            Dim OutputPath As String = Path.Combine(DestPath, Path.GetFileName(ImagePath))
-            Try
-                If File.Exists(OutputPath) AndAlso
-                    Not String.Equals(Path.GetFullPath(OutputPath), Path.GetFullPath(ImagePath), StringComparison.OrdinalIgnoreCase) Then
-                    File.Delete(OutputPath)
-                End If
-            Catch ex As Exception
-                System.Diagnostics.Debug.WriteLine("Could not remove cancelled output: " & ex.Message)
-            End Try
-        Next
+    Private Sub DeleteCancelledOutputs(DestPath As String, ImageList As List(Of String),
+                                       AllowedExtensions As HashSet(Of String), ProtectedOutputPaths As HashSet(Of String))
+        DeleteOutputsForInputs(DestPath, ImageList, AllowedExtensions, ProtectedOutputPaths)
     End Sub
 
     Private Sub CleanupUpscaleTemporaryFolders()
-        Dim TemporaryFolders As New List(Of String) From {GetChainPath("Temp", 0)}
-        For j = 0 To ChainList.Count - 2
-            TemporaryFolders.Add(GetChainPath("Chain", j))
-        Next
-        For Each TemporaryFolder As String In TemporaryFolders
-            Try
-                If Directory.Exists(TemporaryFolder) Then Directory.Delete(TemporaryFolder, True)
-            Catch ex As Exception
-                System.Diagnostics.Debug.WriteLine("Could not remove cancelled working folder: " & ex.Message)
-            End Try
-        Next
+        CleanupRunTemporaryRoot()
+    End Sub
+
+    Private Function CreateRunTempRoot() As String
+        Dim TempParent As String = Path.Combine(Path.GetTempPath(), "AutoCrispy")
+        Directory.CreateDirectory(TempParent)
+        Dim TempRoot As String = Path.Combine(TempParent, Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(TempRoot)
+        Return TempRoot
+    End Function
+
+    Private Sub CleanupRunTemporaryRoot()
+        Dim TempRoot As String = CurrentRunTempRoot
+        CurrentRunTempRoot = String.Empty
+        If String.IsNullOrWhiteSpace(TempRoot) Then Return
+        Try
+            If Directory.Exists(TempRoot) Then Directory.Delete(TempRoot, True)
+        Catch ex As Exception
+            System.Diagnostics.Debug.WriteLine("Could not remove worker temporary folder: " & ex.Message)
+        End Try
     End Sub
 
     Private Function IsSpandrelPackageType(PackageType As String) As Boolean
@@ -2041,7 +2645,8 @@ Public Class Form1
     End Function
 
     Private Function GetChainPath(PathType As String, PathIndex As Integer) As String
-        Return Path.GetTempPath & PathType & "_" & PathIndex & "_" & LoadedSettings.ExpertSettings.AlphaMode
+        If String.IsNullOrWhiteSpace(CurrentRunTempRoot) Then CurrentRunTempRoot = CreateRunTempRoot()
+        Return Path.Combine(CurrentRunTempRoot, PathType & "_" & PathIndex.ToString(CultureInfo.InvariantCulture) & "_" & LoadedSettings.ExpertSettings.AlphaMode.ToString(CultureInfo.InvariantCulture))
     End Function
 
 #End Region
@@ -2314,111 +2919,146 @@ Public Class Form1
 #Region "Graphics"
 
     Private Function MakeSeamless(Source As Bitmap, Mirrored As Integer, Margin As Integer) As Bitmap
-        Dim Result As New Bitmap(Source.Width * 3, Source.Height * 3, Source.PixelFormat)
-        Using g As Graphics = Graphics.FromImage(Result)
-            g.CompositingMode = Drawing2D.CompositingMode.SourceCopy
-            g.PixelOffsetMode = Drawing2D.PixelOffsetMode.None
-            g.SmoothingMode = Drawing2D.SmoothingMode.None
-            g.InterpolationMode = Drawing2D.InterpolationMode.NearestNeighbor
-            If Mirrored = 2 Then
-                Dim X = Source.Width
-                Dim Y = Source.Height
-                Dim fX As New Bitmap(Source) : fX.RotateFlip(RotateFlipType.RotateNoneFlipX)
-                Dim fY As New Bitmap(Source) : fY.RotateFlip(RotateFlipType.RotateNoneFlipY)
-                Dim fXY As New Bitmap(Source) : fXY.RotateFlip(RotateFlipType.RotateNoneFlipXY)
-                g.DrawImage(fXY, 0, 0, X, Y) : g.DrawImage(fY, X, 0, X, Y) : g.DrawImage(fXY, 2 * X, 0, X, Y)
-                g.DrawImage(fX, 0, Y, X, Y) : g.DrawImage(Source, X, Y, X, Y) : g.DrawImage(fX, 2 * X, Y, X, Y)
-                g.DrawImage(fXY, 0, 2 * Y, X, Y) : g.DrawImage(fY, X, 2 * Y, X, Y) : g.DrawImage(fXY, 2 * X, 2 * Y, X, Y)
-            ElseIf Mirrored = 1 Then
-                For i = 0 To Source.Width * 2 Step Source.Width
-                    For j = 0 To Source.Height * 2 Step Source.Height
-                        g.DrawImage(Source, i, j, Source.Width, Source.Height)
+        If WorkHorse.CancellationPending OrElse Mirrored <= 0 Then Return New Bitmap(Source)
+        Using Result As New Bitmap(Source.Width * 3, Source.Height * 3, Source.PixelFormat)
+            Using g As Graphics = Graphics.FromImage(Result)
+                g.CompositingMode = Drawing2D.CompositingMode.SourceCopy
+                g.PixelOffsetMode = Drawing2D.PixelOffsetMode.None
+                g.SmoothingMode = Drawing2D.SmoothingMode.None
+                g.InterpolationMode = Drawing2D.InterpolationMode.NearestNeighbor
+                If Mirrored = 2 Then
+                    Dim X As Integer = Source.Width
+                    Dim Y As Integer = Source.Height
+                    Using fX As New Bitmap(Source), fY As New Bitmap(Source), fXY As New Bitmap(Source)
+                        fX.RotateFlip(RotateFlipType.RotateNoneFlipX)
+                        fY.RotateFlip(RotateFlipType.RotateNoneFlipY)
+                        fXY.RotateFlip(RotateFlipType.RotateNoneFlipXY)
+                        g.DrawImage(fXY, 0, 0, X, Y) : g.DrawImage(fY, X, 0, X, Y) : g.DrawImage(fXY, 2 * X, 0, X, Y)
+                        g.DrawImage(fX, 0, Y, X, Y) : g.DrawImage(Source, X, Y, X, Y) : g.DrawImage(fX, 2 * X, Y, X, Y)
+                        g.DrawImage(fXY, 0, 2 * Y, X, Y) : g.DrawImage(fY, X, 2 * Y, X, Y) : g.DrawImage(fXY, 2 * X, 2 * Y, X, Y)
+                    End Using
+                ElseIf Mirrored = 1 Then
+                    For i As Integer = 0 To Source.Width * 2 Step Source.Width
+                        If WorkHorse.CancellationPending Then Return New Bitmap(Source)
+                        For j As Integer = 0 To Source.Height * 2 Step Source.Height
+                            g.DrawImage(Source, i, j, Source.Width, Source.Height)
+                        Next
                     Next
-                Next
-            Else
-                Return Source
-            End If
+                Else
+                    Return New Bitmap(Source)
+                End If
+            End Using
+            If WorkHorse.CancellationPending Then Return New Bitmap(Source)
+            Return CropImage(Result, Source.Width, Source.Height, Source.Width, Source.Height, Margin)
         End Using
-        Return CropImage(Result, Source.Width, Source.Height, Source.Width, Source.Height, Margin)
     End Function
 
     Private Function GetHasTransparency(Source As String) As Boolean
         Using SourceImage As Bitmap = GetUnlockedImage(Source)
-            Dim SourceRect As Rectangle = New Rectangle(0, 0, SourceImage.Width, SourceImage.Height)
-            Dim SourceData As Imaging.BitmapData = Nothing
-            Try
-                SourceData = SourceImage.LockBits(SourceRect, Imaging.ImageLockMode.ReadOnly, SourceImage.PixelFormat)
-                Dim SourcePtr As IntPtr = SourceData.Scan0
-                Dim SourceByteCount As Integer = Math.Abs(SourceData.Stride) * SourceImage.Height
-                Dim SourceBytes As Byte() = New Byte(SourceByteCount - 1) {}
-                Runtime.InteropServices.Marshal.Copy(SourcePtr, SourceBytes, 0, SourceByteCount)
-                For i = 3 To SourceBytes.Length - 1 Step 4
-                    If SourceBytes(i) = 0 Then Return True
-                Next
-            Finally
-                If SourceData IsNot Nothing Then SourceImage.UnlockBits(SourceData)
-            End Try
+            Using ArgbImage As New Bitmap(SourceImage.Width, SourceImage.Height, Imaging.PixelFormat.Format32bppArgb)
+                Using ConversionGraphics As System.Drawing.Graphics = System.Drawing.Graphics.FromImage(ArgbImage)
+                    ConversionGraphics.CompositingMode = Drawing2D.CompositingMode.SourceCopy
+                    ConversionGraphics.DrawImage(SourceImage, New Rectangle(0, 0, ArgbImage.Width, ArgbImage.Height))
+                End Using
+
+                Dim SourceRect As New Rectangle(0, 0, ArgbImage.Width, ArgbImage.Height)
+                Dim SourceData As Imaging.BitmapData = Nothing
+                Try
+                    SourceData = ArgbImage.LockBits(SourceRect, Imaging.ImageLockMode.ReadOnly,
+                                                     Imaging.PixelFormat.Format32bppArgb)
+                    For Y As Integer = 0 To ArgbImage.Height - 1
+                        If WorkHorse.CancellationPending Then Return False
+                        Dim RowOffset As Integer = Y * SourceData.Stride
+                        For X As Integer = 0 To ArgbImage.Width - 1
+                            Dim Alpha As Byte = Runtime.InteropServices.Marshal.ReadByte(
+                                SourceData.Scan0, RowOffset + (X * 4) + 3)
+                            If Alpha < 255 Then Return True
+                        Next
+                    Next
+                Finally
+                    If SourceData IsNot Nothing Then ArgbImage.UnlockBits(SourceData)
+                End Try
+            End Using
         End Using
         Return False
     End Function
 
     Private Function CropImage(Source As Bitmap, OffsetX As Integer, OffsetY As Integer, Width As Integer, Height As Integer, Margins As Integer) As Bitmap
+        If WorkHorse.CancellationPending Then Return New Bitmap(Source)
         Dim CropSize As New Rectangle(OffsetX - Margins, OffsetY - Margins, Width + (2 * Margins), Height + (2 * Margins))
-        Dim Result = New Bitmap(CropSize.Width, CropSize.Height, Source.PixelFormat)
-        Using g As Graphics = Graphics.FromImage(Result)
-            g.CompositingMode = Drawing2D.CompositingMode.SourceCopy
-            g.PixelOffsetMode = Drawing2D.PixelOffsetMode.None
-            g.SmoothingMode = Drawing2D.SmoothingMode.None
-            g.InterpolationMode = Drawing2D.InterpolationMode.NearestNeighbor
-            g.DrawImage(Source, New Rectangle(0, 0, CropSize.Width, CropSize.Height), CropSize, GraphicsUnit.Pixel)
-        End Using
-        Return Result
+        Dim Result As New Bitmap(CropSize.Width, CropSize.Height, Source.PixelFormat)
+        Try
+            Using g As Graphics = Graphics.FromImage(Result)
+                g.CompositingMode = Drawing2D.CompositingMode.SourceCopy
+                g.PixelOffsetMode = Drawing2D.PixelOffsetMode.None
+                g.SmoothingMode = Drawing2D.SmoothingMode.None
+                g.InterpolationMode = Drawing2D.InterpolationMode.NearestNeighbor
+                g.DrawImage(Source, New Rectangle(0, 0, CropSize.Width, CropSize.Height), CropSize, GraphicsUnit.Pixel)
+            End Using
+            If WorkHorse.CancellationPending Then
+                Result.Dispose()
+                Return New Bitmap(Source)
+            End If
+            Return Result
+        Catch
+            Result.Dispose()
+            Throw
+        End Try
     End Function
 
     Private Sub Defringe(Source As String, Threshold As Integer)
-        Dim NewImage As New DirectBitmap(GetUnlockedImage(Source))
-        For X = 0 To NewImage.Width - 1
-            For Y = 0 To NewImage.Height - 1
-                If NewImage.GetPixel(X, Y).A < Threshold Then
-                    NewImage.SetPixel(X, Y, Color.Transparent)
-                End If
-            Next
-        Next
-        NewImage.Bitmap.Save(Source)
+        Using SourceImage As Bitmap = GetUnlockedImage(Source)
+            Using NewImage As New DirectBitmap(SourceImage)
+                For Y As Integer = 0 To NewImage.Height - 1
+                    If WorkHorse.CancellationPending Then Return
+                    For X As Integer = 0 To NewImage.Width - 1
+                        If NewImage.GetPixel(X, Y).A < Threshold Then
+                            NewImage.SetPixel(X, Y, Color.Transparent)
+                        End If
+                    Next
+                Next
+                If Not WorkHorse.CancellationPending Then NewImage.Bitmap.Save(Source)
+            End Using
+        End Using
     End Sub
 
     Private Sub RemovePS2Alpha(Source As String)
-        Dim NewImage As New DirectBitmap(GetUnlockedImage(Source))
-        Dim AlphaMax As Integer = 0
-        For X = 0 To NewImage.Width - 1
-            For Y = 0 To NewImage.Height - 1
-                Dim TempColor As Color = NewImage.GetPixel(X, Y)
-                If TempColor.A > AlphaMax Then
-                    AlphaMax = TempColor.A
-                End If
-                If Not AlphaMax <= 128 Then
-                    NewImage.Dispose()
-                    Exit Sub
-                End If
-                If TempColor.A <> 0 Then
-                    NewImage.SetPixel(X, Y, Color.FromArgb((TempColor.A * 2) - 1, TempColor.R, TempColor.G, TempColor.B))
-                End If
-            Next
-        Next
-        NewImage.Bitmap.Save(Source)
+        Using SourceImage As Bitmap = GetUnlockedImage(Source)
+            Using NewImage As New DirectBitmap(SourceImage)
+                Dim AlphaMax As Integer = 0
+                For Y As Integer = 0 To NewImage.Height - 1
+                    If WorkHorse.CancellationPending Then Return
+                    For X As Integer = 0 To NewImage.Width - 1
+                        Dim TempColor As Color = NewImage.GetPixel(X, Y)
+                        If TempColor.A > AlphaMax Then AlphaMax = TempColor.A
+                        If AlphaMax > 128 Then Return
+                        If TempColor.A <> 0 Then
+                            NewImage.SetPixel(X, Y, Color.FromArgb((TempColor.A * 2) - 1,
+                                TempColor.R, TempColor.G, TempColor.B))
+                        End If
+                    Next
+                Next
+                If Not WorkHorse.CancellationPending Then NewImage.Bitmap.Save(Source)
+            End Using
+        End Using
     End Sub
 
     Private Sub AddPS2Alpha(Source As String)
-        Dim NewImage As New DirectBitmap(GetUnlockedImage(Source))
-        For X = 0 To NewImage.Width - 1
-            For Y = 0 To NewImage.Height - 1
-                Dim TempColor As Color = NewImage.GetPixel(X, Y)
-                If TempColor.A <> 0 Then
-                    NewImage.SetPixel(X, Y, Color.FromArgb((TempColor.A + 1) / 2, TempColor.R, TempColor.G, TempColor.B))
-                End If
-            Next
-        Next
-        NewImage.Bitmap.Save(Source)
+        Using SourceImage As Bitmap = GetUnlockedImage(Source)
+            Using NewImage As New DirectBitmap(SourceImage)
+                For Y As Integer = 0 To NewImage.Height - 1
+                    If WorkHorse.CancellationPending Then Return
+                    For X As Integer = 0 To NewImage.Width - 1
+                        Dim TempColor As Color = NewImage.GetPixel(X, Y)
+                        If TempColor.A <> 0 Then
+                            NewImage.SetPixel(X, Y, Color.FromArgb((TempColor.A + 1) / 2,
+                                TempColor.R, TempColor.G, TempColor.B))
+                        End If
+                    Next
+                Next
+                If Not WorkHorse.CancellationPending Then NewImage.Bitmap.Save(Source)
+            End Using
+        End Using
     End Sub
 
 #End Region
@@ -2537,6 +3177,7 @@ Public Class Form1
                                           ByRef AlphaFilteredCount As Integer, ByRef SupportedCount As Integer,
                                           ByRef MissingCount As Integer) As String()
         Dim SupportedFiles As String() = GetSupportedInputFiles(InputFiles, SupportedExtensions)
+        EnsureNoFlattenedNameCollisions(SupportedFiles)
         UnsupportedCount = If(InputFiles Is Nothing, 0, InputFiles.Length - SupportedFiles.Length)
         SupportedCount = SupportedFiles.Length
         Dim MissingFiles As String() = GetMissingFiles(SupportedFiles, OutputPath)
@@ -2553,6 +3194,21 @@ Public Class Form1
         Next
         Return PendingFiles.ToArray()
     End Function
+
+    Private Sub EnsureNoFlattenedNameCollisions(SupportedFiles As String())
+        If SupportedFiles Is Nothing OrElse SupportedFiles.Length < 2 Then Return
+        Dim FirstPathByStem As New Dictionary(Of String, String)(StringComparer.OrdinalIgnoreCase)
+        For Each SupportedFile As String In SupportedFiles
+            Dim Stem As String = Path.GetFileNameWithoutExtension(SupportedFile)
+            Dim ExistingPath As String = Nothing
+            If FirstPathByStem.TryGetValue(Stem, ExistingPath) Then
+                Throw New InvalidOperationException(
+                    "Cannot process files with the same name (ignoring extension) because AutoCrispy stages inputs in a flat folder: " &
+                    ExistingPath & " and " & SupportedFile & ". Rename one file or separate the inputs into another watched folder.")
+            End If
+            FirstPathByStem.Add(Stem, SupportedFile)
+        Next
+    End Sub
 
     Private Function GetActiveAlphaMode() As Integer
         If WorkHorse.IsBusy Then Return LoadedSettings.ExpertSettings.AlphaMode
@@ -2617,20 +3273,8 @@ Public Class Form1
         Return ControlChars.Quote & Source & ControlChars.Quote
     End Function
 
-    Private Sub WriteLog(Source As Process, SaveLoc As String)
-        Dim Filename As String = SaveLoc & "\Log_" & Now.ToString("yyyy-MM-dd_HH-mm-ss") & ".txt"
-        Dim Output As String = ""
-        Output += Source.StartInfo.FileName & " "
-        Output += Source.StartInfo.Arguments
-        Output += vbNewLine & vbNewLine
-        Output += Source.StandardOutput.ReadToEnd
-        Output += vbNewLine & vbNewLine
-        Output += Source.StandardError.ReadToEnd
-        File.WriteAllText(Filename, Output)
-    End Sub
-
     Private Sub WriteProcessLog(StartInfo As ProcessStartInfo, StandardOutput As String, StandardError As String, SaveLoc As String, BackendName As String, ExitCode As Integer)
-        Dim Filename As String = Path.Combine(SaveLoc, BackendName & "_" & Now.ToString("yyyy-MM-dd_HH-mm-ss") & ".txt")
+        Dim Filename As String = Path.Combine(SaveLoc, BackendName & "_" & Now.ToString("yyyy-MM-dd_HH-mm-ss-fff") & "_" & Guid.NewGuid().ToString("N").Substring(0, 8) & ".txt")
         Dim Output As String = StartInfo.FileName & " " & StartInfo.Arguments & vbNewLine & "Exit code: " & ExitCode.ToString() & vbNewLine & vbNewLine
         Output &= StandardOutput & vbNewLine & vbNewLine & StandardError
         File.WriteAllText(Filename, Output)
