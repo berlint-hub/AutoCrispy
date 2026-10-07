@@ -109,6 +109,12 @@ def parse_args() -> argparse.Namespace:
         help="CPU worker threads for analysis/inference (0 uses up to 16; default: auto)",
     )
     parser.add_argument(
+        "--precision",
+        choices=("auto", "fp16", "fp32"),
+        default="auto",
+        help="Inference precision: auto selects supported FP16 on CUDA; fp32 disables TF32",
+    )
+    parser.add_argument(
         "--cpu", action="store_true", help="Force CPU inference instead of CUDA"
     )
     parser.add_argument(
@@ -159,25 +165,25 @@ def _resolve_cpu_threads(requested: int = 0) -> int:
     return min(requested if requested > 0 else DEFAULT_CPU_THREAD_LIMIT, available)
 
 
-def _configure_torch_runtime(torch: Any, device: Any, cpu_threads: int = 0) -> int:
+def _configure_torch_runtime(
+    torch: Any, device: Any, cpu_threads: int = 0, precision: str = "auto"
+) -> int:
     """Set conservative CPU parallelism and enable safe Ada/CUDA fast paths."""
     global _CONFIGURED_TORCH_MODULE
     thread_count = _resolve_cpu_threads(cpu_threads)
-    if _CONFIGURED_TORCH_MODULE is torch:
-        return thread_count
-
-    set_num_threads = getattr(torch, "set_num_threads", None)
-    if callable(set_num_threads):
-        set_num_threads(thread_count)
-    set_interop_threads = getattr(torch, "set_num_interop_threads", None)
-    if callable(set_interop_threads):
-        try:
-            # Inference is sequential; one inter-op worker avoids over-subscribing
-            # the 16 intra-op CPU workers on high-core-count desktop CPUs.
-            set_interop_threads(1)
-        except RuntimeError:
-            # PyTorch only permits this setting before parallel work has started.
-            pass
+    if _CONFIGURED_TORCH_MODULE is not torch:
+        set_num_threads = getattr(torch, "set_num_threads", None)
+        if callable(set_num_threads):
+            set_num_threads(thread_count)
+        set_interop_threads = getattr(torch, "set_num_interop_threads", None)
+        if callable(set_interop_threads):
+            try:
+                # Inference is sequential; one inter-op worker avoids over-subscribing
+                # the 16 intra-op CPU workers on high-core-count desktop CPUs.
+                set_interop_threads(1)
+            except RuntimeError:
+                # PyTorch only permits this setting before parallel work has started.
+                pass
 
     if getattr(device, "type", "") == "cuda":
         backends = getattr(torch, "backends", None)
@@ -185,11 +191,11 @@ def _configure_torch_runtime(torch: Any, device: Any, cpu_threads: int = 0) -> i
         if cudnn is not None:
             cudnn.benchmark = True
             if hasattr(cudnn, "allow_tf32"):
-                cudnn.allow_tf32 = True
+                cudnn.allow_tf32 = precision != "fp32"
         cuda_backend = getattr(backends, "cuda", None)
         matmul = getattr(cuda_backend, "matmul", None)
         if matmul is not None and hasattr(matmul, "allow_tf32"):
-            matmul.allow_tf32 = True
+            matmul.allow_tf32 = precision != "fp32"
 
     _CONFIGURED_TORCH_MODULE = torch
     return thread_count
@@ -200,6 +206,7 @@ def _load_model(
     force_cpu: bool,
     generic_model: bool = False,
     cpu_threads: int = 0,
+    precision: str = "auto",
 ) -> tuple[Any, Any, Any, str]:
     try:
         import torch
@@ -209,6 +216,10 @@ def _load_model(
             "Spandrel upscalers need PyTorch and Spandrel. Follow "
             "PLKSR_SETUP.md to install them in AutoCrispy's Python environment."
         ) from error
+
+    precision = (precision or "auto").casefold()
+    if precision not in {"auto", "fp16", "fp32"}:
+        raise ValueError("Precision must be auto, fp16, or fp32.")
 
     profile = MODEL_PROFILES.get(model_path.name.casefold())
     if not generic_model and profile is None:
@@ -221,7 +232,9 @@ def _load_model(
     device = torch.device(
         "cpu" if force_cpu or not torch.cuda.is_available() else "cuda:0"
     )
-    _configure_torch_runtime(torch, device, cpu_threads)
+    _configure_torch_runtime(torch, device, cpu_threads, precision)
+    if precision == "fp16" and device.type != "cuda":
+        raise ValueError("FP16 precision requires CUDA; use auto or fp32 for CPU inference.")
     descriptor = ModelLoader(device).load_from_file(model_path)
     if not isinstance(descriptor, ImageModelDescriptor):
         raise ValueError("The selected checkpoint is not an image super-resolution model.")
@@ -268,7 +281,15 @@ def _load_model(
     # Use fp16 only when the checkpoint explicitly advertises support. Some
     # community checkpoints advertise bfloat16 but still mix float32-only
     # operations in their forward pass; float32 is the safe fallback.
-    if device.type == "cuda" and descriptor.supports_half:
+    if precision == "fp16":
+        if not descriptor.supports_half:
+            raise ValueError(
+                f"Checkpoint {model_path.name} does not advertise FP16 support; use auto or fp32."
+            )
+        dtype = torch.float16
+    elif precision == "fp32":
+        dtype = torch.float32
+    elif device.type == "cuda" and descriptor.supports_half:
         dtype = torch.float16
     else:
         dtype = torch.float32
@@ -678,11 +699,20 @@ def _run_auto_route(args: argparse.Namespace) -> int:
         raise ValueError("Architect and Painter must be different checkpoints.")
 
     cpu_threads = getattr(args, "cpu_threads", 0)
+    precision = getattr(args, "precision", "auto")
     architect, architect_device, architect_dtype, architect_device_name = _load_model(
-        args.architect_model, args.cpu, generic_model=True, cpu_threads=cpu_threads
+        args.architect_model,
+        args.cpu,
+        generic_model=True,
+        cpu_threads=cpu_threads,
+        precision=precision,
     )
     painter, painter_device, painter_dtype, painter_device_name = _load_model(
-        args.painter_model, args.cpu, generic_model=True, cpu_threads=cpu_threads
+        args.painter_model,
+        args.cpu,
+        generic_model=True,
+        cpu_threads=cpu_threads,
+        precision=precision,
     )
     if architect.scale != MODEL_SCALE or painter.scale != MODEL_SCALE:
         raise ValueError("Automatic Architect/Painter routing requires two 4x RGB models.")
@@ -862,6 +892,7 @@ def run(args: argparse.Namespace) -> int:
         args.cpu,
         args.generic_model,
         getattr(args, "cpu_threads", 0),
+        getattr(args, "precision", "auto"),
     )
     profile = MODEL_PROFILES.get(args.model.name.casefold())
     display_name = profile[0] if profile is not None else str(model.architecture.id)

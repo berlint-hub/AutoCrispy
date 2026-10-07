@@ -50,6 +50,7 @@
         'Load ESRGAN Settings
         Source.PyTileSize.Value = LoadedSettings.PythonPak.TileSize
         Source.PyCPU.Checked = LoadedSettings.PythonPak.CPUOnly
+        Source.LoadInferencePrecision(LoadedSettings.PythonPak.Precision)
         Source.LoadSpandrelModelPreferences(LoadedSettings.PythonPak.Model,
             LoadedSettings.PythonPak.ArchitectModel, LoadedSettings.PythonPak.PainterModel)
         Dim SavedPainterShare As Integer = LoadedSettings.PythonPak.PainterShare
@@ -279,9 +280,9 @@
                 Case "ESRGAN"
                     Package = New PythonPackage(Source.GetSelectedUpscaleModel(), Source.PyTileSize.Value, Source.PyCPU.Checked)
                 Case "RealPLKSR"
-                    Package = New PythonPackage(Source.GetSelectedUpscaleModel(), Source.PyTileSize.Value, Source.PyCPU.Checked, True)
+                    Package = New PythonPackage(Source.GetSelectedUpscaleModel(), Source.PyTileSize.Value, Source.PyCPU.Checked, True, _Precision:=Source.GetSelectedInferencePrecision())
                 Case "DAT2"
-                    Package = New PythonPackage(Source.GetSelectedUpscaleModel(), Source.PyTileSize.Value, Source.PyCPU.Checked, True)
+                    Package = New PythonPackage(Source.GetSelectedUpscaleModel(), Source.PyTileSize.Value, Source.PyCPU.Checked, True, _Precision:=Source.GetSelectedInferencePrecision())
                 Case "Spandrel"
                     Package = Source.GetSelectedPythonPackage(False)
             End Select
@@ -415,6 +416,7 @@
         Public Property PainterModel As String
         Public Property PainterShare As Integer
         Public Property PainterThreshold As Decimal
+        Public Property Precision As String
         Public Property FileTypes As List(Of String)
         <Xml.Serialization.XmlIgnore()>
         Public Property PreserveRoutePreferencesWhenSerializing As Boolean
@@ -430,7 +432,7 @@
         Public Sub New(_Model As String, _TileSize As Integer, _CPUOnly As Boolean, Optional _UseSpandrelFormats As Boolean = False,
                        Optional _AutoRouteEnabled As Boolean = False, Optional _ArchitectModel As String = "",
                        Optional _PainterModel As String = "", Optional _PainterShare As Integer = 30,
-                       Optional _PainterThreshold As Decimal = 0.34D)
+                       Optional _PainterThreshold As Decimal = 0.34D, Optional _Precision As String = "auto")
             Model = _Model
             TileSize = _TileSize
             CPUOnly = _CPUOnly
@@ -439,6 +441,7 @@
             PainterModel = _PainterModel
             PainterShare = _PainterShare
             PainterThreshold = _PainterThreshold
+            Precision = If(String.IsNullOrWhiteSpace(_Precision), "auto", _Precision.Trim().ToLowerInvariant())
             If _UseSpandrelFormats Then
                 FileTypes = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp", ".tga"}.ToList
             Else

@@ -85,6 +85,8 @@ Partial Class Form1
         Me.Label20 = New System.Windows.Forms.Label()
         Me.PyGroup = New System.Windows.Forms.GroupBox()
         Me.PyCPU = New System.Windows.Forms.CheckBox()
+        Me.PyPrecisionLabel = New System.Windows.Forms.Label()
+        Me.PyPrecisionComboBox = New System.Windows.Forms.ComboBox()
         Me.PyTileSize = New System.Windows.Forms.NumericUpDown()
         Me.PyModel = New System.Windows.Forms.ComboBox()
         Me.Label25 = New System.Windows.Forms.Label()
@@ -865,6 +867,8 @@ Partial Class Form1
         'PyGroup
         '
         Me.PyGroup.Controls.Add(Me.PyCPU)
+        Me.PyGroup.Controls.Add(Me.PyPrecisionLabel)
+        Me.PyGroup.Controls.Add(Me.PyPrecisionComboBox)
         Me.PyGroup.Controls.Add(Me.AutoPainterShareSuffix)
         Me.PyGroup.Controls.Add(Me.AutoPainterThresholdSuffix)
         Me.PyGroup.Controls.Add(Me.AutoPainterThreshold)
@@ -1059,6 +1063,26 @@ Partial Class Form1
         Me.PyCPU.Text = "CPU only"
         Me.PyCPU.UseVisualStyleBackColor = True
         '
+        'PyPrecisionLabel
+        '
+        Me.PyPrecisionLabel.AutoSize = True
+        Me.PyPrecisionLabel.Location = New System.Drawing.Point(330, 143)
+        Me.PyPrecisionLabel.Name = "PyPrecisionLabel"
+        Me.PyPrecisionLabel.Size = New System.Drawing.Size(72, 20)
+        Me.PyPrecisionLabel.TabIndex = 6
+        Me.PyPrecisionLabel.Text = "Precision:"
+        '
+        'PyPrecisionComboBox
+        '
+        Me.PyPrecisionComboBox.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList
+        Me.PyPrecisionComboBox.FormattingEnabled = True
+        Me.PyPrecisionComboBox.Items.AddRange(New Object() {"Auto", "FP16", "FP32"})
+        Me.PyPrecisionComboBox.Location = New System.Drawing.Point(405, 139)
+        Me.PyPrecisionComboBox.Name = "PyPrecisionComboBox"
+        Me.PyPrecisionComboBox.Size = New System.Drawing.Size(174, 28)
+        Me.PyPrecisionComboBox.TabIndex = 7
+        Me.PyPrecisionComboBox.SelectedIndex = 0
+        '
         'PyTileSize
         '
         Me.PyTileSize.Location = New System.Drawing.Point(90, 139)
@@ -1109,7 +1133,7 @@ Partial Class Form1
         Me.TileSizeHint.Margin = New System.Windows.Forms.Padding(4, 0, 4, 0)
         Me.TileSizeHint.Name = "TileSizeHint"
         Me.TileSizeHint.Size = New System.Drawing.Size(570, 20)
-        Me.TileSizeHint.TabIndex = 6
+        Me.TileSizeHint.TabIndex = 8
         Me.TileSizeHint.Text = "1024 is recommended for 16 GB GPUs; retries smaller tiles on GPU OOM."
         '
         'SpandrelModelInfoLabel
@@ -1888,6 +1912,8 @@ Partial Class Form1
     Friend WithEvents PS2Check As CheckBox
     Friend WithEvents ChainPreview As PictureBox
     Friend WithEvents PyCPU As CheckBox
+    Friend WithEvents PyPrecisionLabel As Label
+    Friend WithEvents PyPrecisionComboBox As ComboBox
     Friend WithEvents PyTileSize As NumericUpDown
     Friend WithEvents Label25 As Label
     Friend WithEvents TileSizeHint As Label

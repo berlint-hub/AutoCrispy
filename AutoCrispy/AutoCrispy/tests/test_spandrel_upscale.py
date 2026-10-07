@@ -208,6 +208,66 @@ class SpandrelRunnerTests(unittest.TestCase):
             self.assertTrue(torch.backends.cudnn.allow_tf32)
             self.assertTrue(torch.backends.cuda.matmul.allow_tf32)
 
+    def test_auto_precision_uses_fp16_when_cuda_checkpoint_supports_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkpoint = Path(temporary) / "half-model.pth"
+            checkpoint.touch()
+            descriptor = FakeImageDescriptor(architecture="SomeRegisteredSR")
+            descriptor.supports_half = True
+            torch, spandrel = self.make_fake_modules({checkpoint.name: descriptor})
+            torch.cuda = types.SimpleNamespace(is_available=lambda: True)
+            with patch.dict(sys.modules, {"torch": torch, "spandrel": spandrel}):
+                _, device, dtype, _ = runner._load_model(
+                    checkpoint, force_cpu=False, generic_model=True
+                )
+
+            self.assertEqual(device.type, "cuda")
+            self.assertIs(dtype, torch.float16)
+
+    def test_explicit_fp16_rejects_cpu_and_unsupported_checkpoints(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkpoint = Path(temporary) / "no-half.pth"
+            checkpoint.touch()
+            descriptor = FakeImageDescriptor(architecture="SomeRegisteredSR")
+            torch, spandrel = self.make_fake_modules({checkpoint.name: descriptor})
+            with patch.dict(sys.modules, {"torch": torch, "spandrel": spandrel}):
+                with self.assertRaisesRegex(ValueError, "requires CUDA"):
+                    runner._load_model(
+                        checkpoint, force_cpu=True, generic_model=True, precision="fp16"
+                    )
+
+            torch, spandrel = self.make_fake_modules({checkpoint.name: descriptor})
+            torch.cuda = types.SimpleNamespace(is_available=lambda: True)
+            with patch.dict(sys.modules, {"torch": torch, "spandrel": spandrel}):
+                with self.assertRaisesRegex(ValueError, "does not advertise FP16 support"):
+                    runner._load_model(
+                        checkpoint, force_cpu=False, generic_model=True, precision="fp16"
+                    )
+
+    def test_explicit_fp32_disables_tf32_on_cuda(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkpoint = Path(temporary) / "half-capable.pth"
+            checkpoint.touch()
+            descriptor = FakeImageDescriptor(architecture="SomeRegisteredSR")
+            descriptor.supports_half = True
+            torch, spandrel = self.make_fake_modules({checkpoint.name: descriptor})
+            torch.cuda = types.SimpleNamespace(is_available=lambda: True)
+            with patch.dict(sys.modules, {"torch": torch, "spandrel": spandrel}):
+                _, _, dtype, _ = runner._load_model(
+                    checkpoint,
+                    force_cpu=False,
+                    generic_model=True,
+                    precision="fp32",
+                )
+
+            self.assertIs(dtype, torch.float32)
+            self.assertFalse(torch.backends.cudnn.allow_tf32)
+            self.assertFalse(torch.backends.cuda.matmul.allow_tf32)
+
+            runner._configure_torch_runtime(torch, FakeDevice("cuda:0"), precision="auto")
+            self.assertTrue(torch.backends.cudnn.allow_tf32)
+            self.assertTrue(torch.backends.cuda.matmul.allow_tf32)
+
     def test_cuda_uses_float32_when_checkpoint_only_advertises_bfloat16(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             checkpoint = Path(temporary) / "bf16-model.pth"
@@ -300,7 +360,11 @@ class SpandrelRunnerTests(unittest.TestCase):
             )
 
             def fake_load_model(
-                path: Path, _force_cpu: bool, generic_model: bool, cpu_threads: int = 0
+                path: Path,
+                _force_cpu: bool,
+                generic_model: bool,
+                cpu_threads: int = 0,
+                precision: str = "auto",
             ):
                 model = architect if path == architect_path else painter
                 return model, FakeDevice("cuda:0"), "float32", "cuda:0"
@@ -397,9 +461,30 @@ class SpandrelRunnerTests(unittest.TestCase):
             self.assertFalse(args.auto_route)
             self.assertEqual(args.tile_size, 1024)
             self.assertEqual(args.cpu_threads, 0)
+            self.assertEqual(args.precision, "auto")
             self.assertEqual(args.model, model_path)
             self.assertIsNone(args.architect_model)
             self.assertIsNone(args.painter_model)
+
+    def test_cli_accepts_explicit_fp32_precision(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with patch.object(
+                sys,
+                "argv",
+                [
+                    "spandrel_upscale.py",
+                    str(root / "model.pth"),
+                    "--input",
+                    str(root / "input"),
+                    "--output",
+                    str(root / "output"),
+                    "--precision",
+                    "fp32",
+                ],
+            ):
+                args = runner.parse_args()
+            self.assertEqual(args.precision, "fp32")
 
     def test_preview_route_cli_needs_only_an_input_folder(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -835,7 +835,7 @@ Public Class Form1
             If ChainItem.PackageType = "ESRGAN" AndAlso ChainItem.Package IsNot Nothing Then
                 Dim PythonSettings As FormSettings.PythonPackage = CType(ChainItem.Package, FormSettings.PythonPackage)
                 If String.Equals(Path.GetFileNameWithoutExtension(PythonSettings.Model), "4x_gameai_2.0", StringComparison.OrdinalIgnoreCase) Then
-                    PythonSettings = New FormSettings.PythonPackage(PreferredModel, PythonSettings.TileSize, PythonSettings.CPUOnly, True)
+                    PythonSettings = New FormSettings.PythonPackage(PreferredModel, PythonSettings.TileSize, PythonSettings.CPUOnly, True, _Precision:=PythonSettings.Precision)
                     ChainItem.Name = PreferredName
                     ChainItem.FileLocation = ""
                     ChainItem.Package = PythonSettings
@@ -1281,7 +1281,14 @@ Public Class Form1
     End Sub
 
     Private Sub UpdateSpandrelModelInfo()
-        Dim IsSpandrelSelected As Boolean = String.Equals(If(ExeComboBox.SelectedItem, "").ToString(), SpandrelBackendName, StringComparison.OrdinalIgnoreCase)
+        Dim BackendName As String = If(ExeComboBox.SelectedItem, "").ToString()
+        Dim IsSpandrelSelected As Boolean = String.Equals(BackendName, SpandrelBackendName, StringComparison.OrdinalIgnoreCase)
+        Dim UsesSpandrelRunner As Boolean = IsSpandrelPackageType(BackendName)
+        PyPrecisionLabel.Visible = UsesSpandrelRunner
+        PyPrecisionComboBox.Visible = UsesSpandrelRunner
+        PyPrecisionComboBox.Enabled = UsesSpandrelRunner AndAlso Not PyCPU.Checked
+        UiToolTip.SetToolTip(PyPrecisionComboBox,
+            "Auto uses FP16 only when a CUDA model advertises support. FP16 requires CUDA; FP32 disables TF32 for full CUDA precision.")
         SpandrelModelInfoLabel.Visible = IsSpandrelSelected
         SpandrelScanStatusLabel.Visible = IsSpandrelSelected
         RefreshSpandrelModelsButton.Visible = IsSpandrelSelected
@@ -1596,6 +1603,31 @@ Public Class Form1
         Return ""
     End Function
 
+    Public Function GetSelectedInferencePrecision() As String
+        If PyPrecisionComboBox.SelectedItem Is Nothing Then Return "auto"
+        Return PyPrecisionComboBox.SelectedItem.ToString().Trim().ToLowerInvariant()
+    End Function
+
+    Public Sub LoadInferencePrecision(Precision As String)
+        Dim NormalizedPrecision As String = If(Precision, String.Empty).Trim().ToLowerInvariant()
+        Select Case NormalizedPrecision
+            Case "fp16"
+                PyPrecisionComboBox.SelectedIndex = If(PyCPU.Checked, 0, 1)
+            Case "fp32"
+                PyPrecisionComboBox.SelectedIndex = 2
+            Case Else
+                PyPrecisionComboBox.SelectedIndex = 0
+        End Select
+        PyPrecisionComboBox.Enabled = Not PyCPU.Checked AndAlso IsSpandrelPackageType(If(ExeComboBox.SelectedItem, "").ToString())
+    End Sub
+
+    Private Sub PyCPU_CheckedChanged(sender As Object, e As EventArgs) Handles PyCPU.CheckedChanged
+        If PyCPU.Checked AndAlso PyPrecisionComboBox.SelectedIndex = 1 Then
+            PyPrecisionComboBox.SelectedIndex = 0
+        End If
+        PyPrecisionComboBox.Enabled = Not PyCPU.Checked AndAlso IsSpandrelPackageType(If(ExeComboBox.SelectedItem, "").ToString())
+    End Sub
+
     Public Function GetSelectedPythonPackage(Optional IncludeRoutePreferences As Boolean = True) As FormSettings.PythonPackage
         Dim BackendName As String = If(ExeComboBox.SelectedItem, "").ToString()
         Dim UseSpandrelFormats As Boolean = BackendName = PLKSRBackendName OrElse BackendName = DAT2BackendName OrElse BackendName = SpandrelBackendName
@@ -1613,13 +1645,13 @@ Public Class Form1
                 LastSelectedArchitectModelPath = ArchitectPath
                 LastSelectedPainterModelPath = PainterPath
                 Return New FormSettings.PythonPackage(AutoTextureRouterToken, CInt(PyTileSize.Value), PyCPU.Checked, True, True,
-                    ArchitectPath, PainterPath, CInt(AutoPainterSharePercent.Value), CDec(AutoPainterThreshold.Value))
+                    ArchitectPath, PainterPath, CInt(AutoPainterSharePercent.Value), CDec(AutoPainterThreshold.Value), GetSelectedInferencePrecision())
             End If
         End If
         Dim ArchitectPreference As String = If(IncludeRoutePreferences, LastSelectedArchitectModelPath, String.Empty)
         Dim PainterPreference As String = If(IncludeRoutePreferences, LastSelectedPainterModelPath, String.Empty)
         Return New FormSettings.PythonPackage(GetSelectedUpscaleModel(), CInt(PyTileSize.Value), PyCPU.Checked, UseSpandrelFormats,
-            False, ArchitectPreference, PainterPreference, CInt(AutoPainterSharePercent.Value), CDec(AutoPainterThreshold.Value))
+            False, ArchitectPreference, PainterPreference, CInt(AutoPainterSharePercent.Value), CDec(AutoPainterThreshold.Value), GetSelectedInferencePrecision())
     End Function
 
     Sub MoveShowGroup(ByRef Source As GroupBox)
@@ -2857,6 +2889,9 @@ Public Class Form1
         End If
         Result.AddArguement("--input", Quote(SourceFolder))
         Result.AddArguement("--output", Quote(DestFolder))
+        Dim Precision As String = If(String.IsNullOrWhiteSpace(Package.Precision), "auto", Package.Precision.Trim().ToLowerInvariant())
+        If Precision <> "auto" AndAlso Precision <> "fp16" AndAlso Precision <> "fp32" Then Precision = "auto"
+        Result.AddArguement("--precision", Precision)
         Result.AddArguement("--tile-size", Package.TileSize.ToString())
         Result.AddArguement("--cpu", Package.CPUOnly)
         If GenericModel Then Result.AddArguement("--generic-model")
