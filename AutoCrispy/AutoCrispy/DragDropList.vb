@@ -13,7 +13,7 @@ Public Class DragDropList
     Private ColumnsPerRow As Integer
     Private ThumbSize As Integer
     Private Const ItemPadding As Integer = 10
-    Private Const CaptionHeight As Integer = 24
+    Private Const CaptionHeight As Integer = 40
 
     Private ClickedIndex As Integer = -1
     Private CurrentIndex As Integer = -1
@@ -185,6 +185,29 @@ Public Class DragDropList
         Return FirstItemIndex + ColumnIndex
     End Function
 
+    Private Function GetCaptionText(Name As String) As String
+        Dim Caption As String = If(Name, String.Empty)
+        Const SpandrelPrefix As String = "Spandrel - "
+        If Caption.StartsWith(SpandrelPrefix, StringComparison.OrdinalIgnoreCase) Then
+            Caption = Caption.Substring(SpandrelPrefix.Length)
+            Dim ModeSuffix As String = String.Empty
+            Dim SuffixStart As Integer = Caption.IndexOf(" · ", StringComparison.Ordinal)
+            If SuffixStart >= 0 Then
+                ModeSuffix = Caption.Substring(SuffixStart)
+                Caption = Caption.Substring(0, SuffixStart)
+            End If
+            If Caption.StartsWith("Auto (", StringComparison.OrdinalIgnoreCase) Then
+                Caption = System.Text.RegularExpressions.Regex.Replace(
+                    Caption, "\.(pth|pt|ckpt|onnx|safetensors)\b", String.Empty,
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+            Else
+                Caption = System.IO.Path.GetFileNameWithoutExtension(Caption)
+            End If
+            Caption &= ModeSuffix
+        End If
+        Return Caption.Replace("_", " ")
+    End Function
+
     Public Sub DrawList(ItemList As List(Of DragDropItem))
         If ListCanvas Is Nothing Then Return
         ImageWidth = ListCanvas.ClientSize.Width
@@ -226,8 +249,7 @@ Public Class DragDropList
                         Using CaptionFormat As New StringFormat With {
                             .LineAlignment = StringAlignment.Center,
                             .Alignment = StringAlignment.Center,
-                            .Trimming = StringTrimming.EllipsisCharacter,
-                            .FormatFlags = StringFormatFlags.NoWrap
+                            .Trimming = StringTrimming.EllipsisCharacter
                         }
                             Using BadgeFormat As New StringFormat With {
                                 .LineAlignment = StringAlignment.Center,
@@ -235,36 +257,30 @@ Public Class DragDropList
                                 .FormatFlags = StringFormatFlags.NoWrap
                             }
                                 Using SelectionBrush As New SolidBrush(Color.FromArgb(226, 239, 255))
-                                    Using SelectionPen As New Pen(Color.FromArgb(43, 113, 178), 2.0!)
-                                        Using NormalPen As New Pen(Color.FromArgb(190, 198, 207), 1.0!)
-                                            Using BadgeBrush As New SolidBrush(Color.FromArgb(43, 113, 178))
-                                                Dim HighlightedIndex As Integer = If(IsDragging, CurrentIndex, ClickedIndex)
-                                                For ItemIndex As Integer = 0 To ItemList.Count - 1
-                                                    Dim BaseX As Integer = ItemIndex Mod ColumnsPerRow
-                                                    Dim BaseY As Integer = ItemIndex \ ColumnsPerRow
-                                                    Dim ItemsInRow As Integer = Math.Min(ColumnsPerRow, ItemList.Count - (BaseY * ColumnsPerRow))
-                                                    Dim RowWidth As Integer = (ItemsInRow * ThumbSize) + ((ItemsInRow - 1) * ItemPadding)
-                                                    Dim RowStartX As Integer = CInt(Math.Floor((ImageWidth - RowWidth) / 2.0))
-                                                    Dim RealX As Integer = RowStartX + ((ThumbSize + ItemPadding) * BaseX)
-                                                    Dim RealY As Integer = ItemPadding + ((ThumbSize + CaptionHeight + ItemPadding) * BaseY)
-                                                    Dim IsSelected As Boolean = ItemIndex = HighlightedIndex
-                                                    Dim CardBounds As New Rectangle(RealX - 3, RealY - 3,
-                                                        ThumbSize + 6, ThumbSize + CaptionHeight + 8)
-                                                    If IsSelected Then Gr.FillRectangle(SelectionBrush, CardBounds)
-                                                    Gr.DrawImage(ItemList(ItemIndex).Thumbnail, RealX, RealY, ThumbSize, ThumbSize)
-                                                    Dim ThumbBounds As New Rectangle(RealX, RealY, Math.Max(1, ThumbSize - 1), Math.Max(1, ThumbSize - 1))
-                                                    Gr.DrawRectangle(If(IsSelected, SelectionPen, NormalPen), ThumbBounds)
+                                    Using BadgeBrush As New SolidBrush(Color.FromArgb(43, 113, 178))
+                                        Dim HighlightedIndex As Integer = If(IsDragging, CurrentIndex, ClickedIndex)
+                                        For ItemIndex As Integer = 0 To ItemList.Count - 1
+                                            Dim BaseX As Integer = ItemIndex Mod ColumnsPerRow
+                                            Dim BaseY As Integer = ItemIndex \ ColumnsPerRow
+                                            Dim ItemsInRow As Integer = Math.Min(ColumnsPerRow, ItemList.Count - (BaseY * ColumnsPerRow))
+                                            Dim RowWidth As Integer = (ItemsInRow * ThumbSize) + ((ItemsInRow - 1) * ItemPadding)
+                                            Dim RowStartX As Integer = CInt(Math.Floor((ImageWidth - RowWidth) / 2.0))
+                                            Dim RealX As Integer = RowStartX + ((ThumbSize + ItemPadding) * BaseX)
+                                            Dim RealY As Integer = ItemPadding + ((ThumbSize + CaptionHeight + ItemPadding) * BaseY)
+                                            Dim IsSelected As Boolean = ItemIndex = HighlightedIndex
+                                            Dim CaptionHighlightBounds As New Rectangle(RealX - 3, RealY + ThumbSize,
+                                                ThumbSize + 6, CaptionHeight + 5)
+                                            If IsSelected Then Gr.FillRectangle(SelectionBrush, CaptionHighlightBounds)
+                                            Gr.DrawImage(ItemList(ItemIndex).Thumbnail, RealX, RealY, ThumbSize, ThumbSize)
 
-                                                    Dim BadgeSize As Integer = Math.Min(26, Math.Max(18, ThumbSize \ 5))
-                                                    Dim BadgeBounds As New Rectangle(RealX + 4, RealY + 4, BadgeSize, BadgeSize)
-                                                    Gr.FillEllipse(BadgeBrush, BadgeBounds)
-                                                    Gr.DrawString((ItemIndex + 1).ToString(), StepFont, Brushes.White, BadgeBounds, BadgeFormat)
+                                            Dim BadgeSize As Integer = Math.Min(26, Math.Max(18, ThumbSize \ 5))
+                                            Dim BadgeBounds As New Rectangle(RealX + 4, RealY + 4, BadgeSize, BadgeSize)
+                                            Gr.FillEllipse(BadgeBrush, BadgeBounds)
+                                            Gr.DrawString((ItemIndex + 1).ToString(), StepFont, Brushes.White, BadgeBounds, BadgeFormat)
 
-                                                    Dim CaptionBounds As New RectangleF(RealX, RealY + ThumbSize + 2, ThumbSize, CaptionHeight)
-                                                    Gr.DrawString(ItemList(ItemIndex).Name, ItemFont, Brushes.Black, CaptionBounds, CaptionFormat)
-                                                Next
-                                            End Using
-                                        End Using
+                                            Dim CaptionBounds As New RectangleF(RealX, RealY + ThumbSize + 2, ThumbSize, CaptionHeight)
+                                            Gr.DrawString(GetCaptionText(ItemList(ItemIndex).Name), ItemFont, Brushes.Black, CaptionBounds, CaptionFormat)
+                                        Next
                                     End Using
                                 End Using
                             End Using

@@ -39,7 +39,6 @@ Public Class Form1
     Private ReadOnly UiToolTip As New ToolTip()
     Private ReadOnly SpandrelTilingBadge As New System.Windows.Forms.Label()
     Private ReadOnly BrowseOpenModelDbButton As New Button()
-    Private ReadOnly ChainInstructionsLabel As New Label()
     Private ReadOnly GamePathProfiles As New BindingList(Of FormSettings.GamePathProfile)
     Private CurrentRunGamePaths As List(Of FormSettings.GamePathProfile)
     Private CurrentRunTempRoot As String = String.Empty
@@ -1075,22 +1074,9 @@ Public Class Form1
 
     Private Sub InitializeChainFriendlyUI()
         ChainGroup.Text = "Processing chain"
-        ChainInstructionsLabel.Name = "ChainInstructionsLabel"
-        ChainInstructionsLabel.AccessibleName = "Processing chain instructions"
-        ChainInstructionsLabel.AccessibleDescription = "Set up a backend, add processing steps, then run them in order."
-        ChainInstructionsLabel.AutoEllipsis = True
-        ChainInstructionsLabel.Location = New Point(ChainPreview.Left, 7)
-        ChainInstructionsLabel.Size = New Size(ChainPreview.Width, 34)
-        ChainInstructionsLabel.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
-        ChainInstructionsLabel.TextAlign = ContentAlignment.MiddleLeft
-        ChainInstructionsLabel.ForeColor = System.Drawing.Color.FromArgb(72, 82, 94)
-        ChainInstructionsLabel.Text = "Choose a backend and its settings in the main panel, then click Add step." & Environment.NewLine &
-            "The numbered steps run in order. Drag to reorder; right-click for more options."
-        ChainGroup.Controls.Add(ChainInstructionsLabel)
-        ChainInstructionsLabel.BringToFront()
 
         Dim PreviewBottomMargin As Integer = Math.Max(7, ChainGroup.ClientSize.Height - ChainPreview.Bottom)
-        ChainPreview.Top = ChainInstructionsLabel.Bottom + 4
+        ChainPreview.Top = 8
         ChainPreview.Height = Math.Max(90, ChainGroup.ClientSize.Height - ChainPreview.Top - PreviewBottomMargin)
 
         Dim ButtonWidth As Integer = 112
@@ -1103,7 +1089,6 @@ Public Class Form1
             ChainButton.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         Next
         ChainPreview.Width = Math.Max(180, ButtonLeft - ButtonGap - ChainPreview.Left)
-        ChainInstructionsLabel.Width = ChainPreview.Width
 
         ChainAdd.Text = "Add step"
         ChainRemove.Text = "Remove step"
@@ -1168,7 +1153,7 @@ Public Class Form1
             If SFD.ShowDialog(Me) <> DialogResult.OK Then Return
             Try
                 File.WriteAllText(SFD.FileName, Serialize(ChainList))
-                ChainInstructionsLabel.Text = "Saved " & ChainList.Count.ToString() & " processing step(s) to " & Path.GetFileName(SFD.FileName) & "."
+                UiToolTip.SetToolTip(ChainSave, "Saved " & ChainList.Count.ToString() & " step(s) to " & Path.GetFileName(SFD.FileName) & ".")
             Catch ex As Exception
                 MessageBox.Show(Me, "The chain could not be saved: " & ex.GetBaseException().Message,
                                 "Save chain failed", MessageBoxButtons.OK, MessageBoxIcon.Error)
@@ -1249,16 +1234,6 @@ Public Class Form1
         Dim SelectedIndex As Integer = If(ChainControl Is Nothing, -1, ChainControl.SelectedIndex)
         ChainRemove.Enabled = SelectedIndex >= 0 AndAlso SelectedIndex < ChainList.Count
         ChainSave.Enabled = ChainList.Count > 0
-        If ChainList.Count = 0 Then
-            ChainInstructionsLabel.Text = "Choose a backend and its settings in the main panel, then click Add step." & Environment.NewLine &
-                "The selected backend runs by itself if you leave the chain empty."
-        ElseIf IsSpandrelSelected AndAlso ExistingSpandrelIndex >= 0 Then
-            ChainInstructionsLabel.Text = "Click Update step to refresh the latest Spandrel stage. Steps run in order; drag to reorder." & Environment.NewLine &
-                "Hold Shift while clicking Update step to append another Spandrel stage. Right-click for advanced options."
-        Else
-            ChainInstructionsLabel.Text = "Click Add step to append the selected backend and settings. Steps run in order; drag to reorder." & Environment.NewLine &
-                "Click a numbered step and choose Remove step, or right-click it for advanced XML options."
-        End If
     End Sub
 
     Private Sub ChainAdd_Click(sender As Object, e As EventArgs) Handles ChainAdd.Click
@@ -1298,12 +1273,12 @@ Public Class Form1
         If ItemIndex < 0 OrElse ItemIndex >= ChainList.Count Then Return
         Dim StepName As String = If(String.IsNullOrWhiteSpace(ChainList(ItemIndex).Name), "this step", ChainList(ItemIndex).Name)
         Dim AdvancedWarning As String = "This opens the advanced raw-XML editor for " & StepName & "." & Environment.NewLine &
-            "Most changes can be made in the main settings panel; only continue if you intend to edit XML."
+            "It explains the step's on/off options. For normal changes, use the main settings panel; other XML edits can break the chain."
         If MessageBox.Show(Me, AdvancedWarning, "Advanced chain editor", MessageBoxButtons.OKCancel,
                            MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) <> DialogResult.OK Then Return
 
         Try
-            Using ECD As New EditChainDialog(Serialize(ChainList(ItemIndex)))
+            Using ECD As New EditChainDialog(Serialize(ChainList(ItemIndex)), ChainList(ItemIndex).PackageType)
                 If ECD.ShowDialog(Me) = DialogResult.OK Then
                     Dim NewChainItem As FormSettings.ChainObject = Deserialize(Of FormSettings.ChainObject)(ECD.ResultText)
                     If NewChainItem.IconIndex < 0 OrElse NewChainItem.IconIndex >= ChainThumbs.Count Then
