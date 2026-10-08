@@ -74,7 +74,7 @@ internal static class LayoutCheck
 
     private static readonly Size[] WindowSizes =
     {
-        new Size(820, 560), new Size(900, 600), new Size(980, 640),
+        new Size(560, 400), new Size(700, 480), new Size(820, 560), new Size(900, 600), new Size(980, 640),
         new Size(1100, 700), new Size(1280, 800), new Size(1600, 900)
     };
 
@@ -119,6 +119,8 @@ internal static class LayoutCheck
                 {
                     form.Size = size;
                     Pump(250);
+                    // The window may be clamped to its minimum; always check what is really shown.
+                    size = form.Size;
                     Visit(form, scaleLabel + " window " + size.Width + "x" + size.Height);
                     SaveScreenshot(form, scaleLabel, size);
                 }
