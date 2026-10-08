@@ -114,6 +114,7 @@ internal static class LayoutCheck
                     Pump(300);
                 }
 
+                Note(form, scaleLabel);
                 foreach (Size size in WindowSizes)
                 {
                     form.Size = size;
@@ -134,7 +135,7 @@ internal static class LayoutCheck
 
         foreach (string w in Warnings)
         {
-            Console.WriteLine("::warning title=Layout::" + Escape(w));
+            Console.WriteLine((w.StartsWith("note ") ? "::notice" : "::warning") + " title=Layout::" + Escape(w));
         }
         foreach (string e in Errors)
         {
@@ -157,6 +158,35 @@ internal static class LayoutCheck
             Application.DoEvents();
             Thread.Sleep(10);
         }
+    }
+
+    // Records what the run actually showed, so an empty result cannot pass silently.
+    private static void Note(Form form, string scaleLabel)
+    {
+        ComboBox exe = FindControl(form, "ExeComboBox") as ComboBox;
+        Control model = FindControl(form, "PyModel");
+        Control catalog = FindControl(form, "BrowseOpenModelDbButton");
+        Control group = FindControl(form, "PyGroup");
+        int visibleInGroup = 0;
+        if (group != null)
+        {
+            foreach (Control c in group.Controls) if (c.Visible) visibleInGroup++;
+        }
+        Warnings.Add("note @" + scaleLabel + ": backend=" + (exe == null ? "?" : Convert.ToString(exe.SelectedItem)) +
+                     " PyModel.Visible=" + (model != null && model.Visible) +
+                     " Catalog.Visible=" + (catalog != null && catalog.Visible) +
+                     " visible controls in PyGroup=" + visibleInGroup);
+    }
+
+    private static Control FindControl(Control root, string name)
+    {
+        if (root.Name == name) return root;
+        foreach (Control c in root.Controls)
+        {
+            Control found = FindControl(c, name);
+            if (found != null) return found;
+        }
+        return null;
     }
 
     private static void SelectSpandrel(Form form)
@@ -251,7 +281,8 @@ internal static class LayoutCheck
         Button button = c as Button;
         CheckBox check = c as CheckBox;
         if (label == null && button == null && check == null) return;
-        if (label != null && label.AutoSize) return;
+        if ((label != null && label.AutoSize) || (check != null && check.AutoSize) ||
+            (button != null && button.AutoSize)) return;
 
         int glyph = check != null ? 22 : 0;
         int padding = (label != null ? label.Padding.Horizontal : 0) + 6;
