@@ -4108,6 +4108,9 @@ Public Class Form1
                 CompletedLogStream.Write(RecordBytes, 0, RecordBytes.Length)
                 CompletedLogStream.Flush()
             End Using
+            If LoadedSettings IsNot Nothing AndAlso LoadedSettings.ExpertSettings.ClearInput AndAlso File.Exists(FullInputPath) Then
+                File.Delete(FullInputPath)
+            End If
             Checkpoint.InProgress.RemoveAll(Function(Candidate As BatchResumeEntry) _
                 String.Equals(Path.GetFullPath(Candidate.InputPath), FullInputPath, StringComparison.OrdinalIgnoreCase))
             Dim ShouldCompactLog As Boolean = False
@@ -4165,7 +4168,16 @@ Public Class Form1
         Dim AllowedExtensionsByStem As New Dictionary(Of String, HashSet(Of String))(StringComparer.OrdinalIgnoreCase)
         For Each Entry As BatchResumeEntry In Checkpoint.InProgress
             Dim FullInputPath As String = Path.GetFullPath(Entry.InputPath)
-            If CompletedEntryKeys.Contains(GetResumeEntryKey(Entry.AttemptId, FullInputPath)) Then Continue For
+            If CompletedEntryKeys.Contains(GetResumeEntryKey(Entry.AttemptId, FullInputPath)) Then
+                If LoadedSettings IsNot Nothing AndAlso LoadedSettings.ExpertSettings.ClearInput AndAlso File.Exists(FullInputPath) Then
+                    Try
+                        File.Delete(FullInputPath)
+                    Catch ex As Exception
+                        Throw New IOException("AutoCrispy could not remove the source for a completed texture while resuming: " & FullInputPath, ex)
+                    End Try
+                End If
+                Continue For
+            End If
             EntriesToRetry.Add(Entry)
             Dim Stem As String = Path.GetFileNameWithoutExtension(Entry.InputPath)
             Dim EntryExtensions As HashSet(Of String) = Nothing
