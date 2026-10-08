@@ -321,9 +321,9 @@ Public Class Form1
                                ScaleForDpi(FormDesignClientHeight) + ChromeSize.Height)
 
         TabGroup.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
-        SettingsGroup.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left
-        RunOnceButton.Anchor = AnchorStyles.Bottom Or AnchorStyles.Left
-        WatchDogButton.Anchor = AnchorStyles.Bottom Or AnchorStyles.Left
+        SettingsGroup.Anchor = AnchorStyles.Top Or AnchorStyles.Left
+        RunOnceButton.Anchor = AnchorStyles.Top Or AnchorStyles.Left
+        WatchDogButton.Anchor = AnchorStyles.Top Or AnchorStyles.Left
         QueueSummaryLabel.Anchor = AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
         QueueActivityLabel.Anchor = AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
         UpscaleProgress.Anchor = AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
@@ -1893,7 +1893,9 @@ Public Class Form1
 
         Dim ClientWidth As Integer = PyGroup.ClientSize.Width
         Dim RightMargin As Integer = Math.Max(4, PyGroup.Padding.Right + 2)
-        Dim LabelGap As Integer = Math.Max(4, PyNormalMapModeComboBox.Left - (PyNormalMapModeLabel.Left + Math.Max(PyNormalMapModeLabel.Width, PyNormalMapModeLabel.PreferredWidth)))
+        Dim LabelGap As Integer = Math.Max(4, ScaleForDpi(6))
+        ' Always start the selector after the label's real width, whichever branch is used.
+        PyNormalMapModeComboBox.Left = PyNormalMapModeLabel.Left + Math.Max(PyNormalMapModeLabel.Width, PyNormalMapModeLabel.PreferredWidth) + LabelGap
         Dim PrecisionLabelWidth As Integer = Math.Max(
             PyPrecisionLabel.Width,
             TextRenderer.MeasureText(PyPrecisionLabel.Text, PyPrecisionLabel.Font).Width
