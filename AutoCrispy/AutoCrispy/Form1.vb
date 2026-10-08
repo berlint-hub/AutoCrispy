@@ -287,6 +287,7 @@ Public Class Form1
     Private Const FormDesignClientHeight As Integer = 640
     Private Const PyGroupDesignWidth As Integer = 594
     Private Const PyGroupDesignHeight As Integer = 360
+    Private Const SettingsGroupDesignHeight As Integer = 263
 
     ' Designer sizes were drawn at 96 DPI; WinForms scales controls, so runtime minimums must too.
     Private Function ScaleForDpi(DesignValue As Integer) As Integer
@@ -300,7 +301,7 @@ Public Class Form1
         ClientSize = InitialClientSize
         ResponsiveTabMinimumWidth = TabGroup.Width
         ResponsiveTabRightMargin = ClientSize.Width - TabGroup.Right
-        ResponsiveSettingsMinimumHeight = SettingsGroup.Height
+        ResponsiveSettingsMinimumHeight = ScaleForDpi(SettingsGroupDesignHeight)
         ResponsiveSettingsBottomMargin = ClientSize.Height - SettingsGroup.Bottom
         ResponsiveActionBottomMargin = ClientSize.Height - RunOnceButton.Bottom
         ResponsivePanelMinimumWidth = Math.Max(PyGroup.Width, ScaleForDpi(PyGroupDesignWidth))
