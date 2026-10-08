@@ -1687,8 +1687,6 @@ Public Class Form1
             "How transparent textures are handled: Off processes every texture; " &
             "Skip Alpha leaves textures that have transparency untouched; " &
             "Alpha Only processes only textures that have transparency.")
-        UiToolTip.SetToolTip(HotKeyCheckbox,
-            "Send the configured hotkey to the game window after each completed texture batch.")
     End Sub
 
     Private Sub InitializeSpandrelRuntimeSetupControl()
