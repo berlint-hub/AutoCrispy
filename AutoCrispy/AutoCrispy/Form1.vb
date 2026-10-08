@@ -369,33 +369,188 @@ Public Class Form1
         Next
     End Sub
 
+    ' ---------------------------------------------------------------------------------------
+    ' Main window layout engine.
+    ' One pass places every visible region from the current client size and the DPI of the
+    ' window. Controls are never positioned by anchors, so no two layout systems can disagree.
+    ' Design values below are in 96-DPI pixels and are scaled with ScaleForDpi.
+    ' Column widths in a row: a positive value is a fixed width, WidthNatural uses the
+    ' control's own size, WidthFill takes the remaining space.
+    ' ---------------------------------------------------------------------------------------
+    Private Const WidthNatural As Integer = 0
+    Private Const WidthFill As Integer = -1
+    Private Const LayoutMarginDesign As Integer = 18
+    Private Const LayoutGapDesign As Integer = 10
+    Private Const RowGapDesign As Integer = 6
+    Private Const CardInsetDesign As Integer = 10
+    Private Const CardTopDesign As Integer = 28
+
+    Private Function NaturalControlWidth(Item As Control) As Integer
+        Dim Label As Label = TryCast(Item, Label)
+        If Label IsNot Nothing AndAlso Label.AutoSize Then Return Label.PreferredSize.Width
+        Dim Check As CheckBox = TryCast(Item, CheckBox)
+        If Check IsNot Nothing AndAlso Check.AutoSize Then Return Check.PreferredSize.Width
+        If TypeOf Item Is Button Then Return Item.PreferredSize.Width + ScaleForDpi(16)
+        Return Item.Width
+    End Function
+
+    Private Function NaturalControlHeight(Item As Control) As Integer
+        Dim Label As Label = TryCast(Item, Label)
+        If Label IsNot Nothing AndAlso Label.AutoSize Then Return Label.PreferredSize.Height
+        Dim Check As CheckBox = TryCast(Item, CheckBox)
+        If Check IsNot Nothing AndAlso Check.AutoSize Then Return Check.PreferredSize.Height
+        If TypeOf Item Is Button Then Return Math.Max(Item.Height, ScaleForDpi(28))
+        Return Item.Height
+    End Function
+
+    ' Places one row left to right. A Nothing entry is a spacer. Returns the row height (0 if empty).
+    Private Function LayoutControlRow(Row As Object(), Left As Integer, Right As Integer, Top As Integer) As Integer
+        Dim Entries As New List(Of Object())
+        For Each Entry As Object() In Row
+            Dim Item As Control = TryCast(Entry(0), Control)
+            If Item Is Nothing OrElse Item.Visible Then Entries.Add(Entry)
+        Next
+        If Entries.Count = 0 Then Return 0
+
+        Dim RowHeight As Integer = 0
+        Dim FixedTotal As Integer = 0
+        Dim FillCount As Integer = 0
+        For Each Entry As Object() In Entries
+            Dim Item As Control = TryCast(Entry(0), Control)
+            Dim Spec As Integer = CInt(Entry(1))
+            If Item IsNot Nothing Then RowHeight = Math.Max(RowHeight, NaturalControlHeight(Item))
+            If Spec = WidthFill Then
+                FillCount += 1
+            ElseIf Spec = WidthNatural AndAlso Item IsNot Nothing Then
+                FixedTotal += NaturalControlWidth(Item)
+            Else
+                FixedTotal += ScaleForDpi(Spec)
+            End If
+        Next
+
+        Dim Gap As Integer = ScaleForDpi(RowGapDesign)
+        Dim Available As Integer = (Right - Left) - FixedTotal - Gap * (Entries.Count - 1)
+        Dim FillWidth As Integer = If(FillCount > 0, Math.Max(ScaleForDpi(40), Available \ FillCount), 0)
+
+        Dim X As Integer = Left
+        For Each Entry As Object() In Entries
+            Dim Item As Control = TryCast(Entry(0), Control)
+            Dim Spec As Integer = CInt(Entry(1))
+            Dim Width As Integer
+            If Spec = WidthFill Then
+                Width = FillWidth
+            ElseIf Spec = WidthNatural AndAlso Item IsNot Nothing Then
+                Width = NaturalControlWidth(Item)
+            Else
+                Width = ScaleForDpi(Spec)
+            End If
+            If Item IsNot Nothing Then
+                Dim Height As Integer = NaturalControlHeight(Item)
+                Item.Anchor = AnchorStyles.Top Or AnchorStyles.Left
+                Item.SetBounds(X, Top + (RowHeight - Height) \ 2, Width, Height)
+            End If
+            X += Width + Gap
+        Next
+        Return RowHeight
+    End Function
+
+    ' Lays out the Spandrel card inside PyGroup. Returns the height of the content, measured
+    ' from the top of the group's client area.
+    Private Function LayoutSpandrelCard(PanelWidth As Integer) As Integer
+        Dim Inset As Integer = ScaleForDpi(CardInsetDesign)
+        Dim Left As Integer = Inset
+        Dim Right As Integer = PanelWidth - Inset
+        Dim Gap As Integer = ScaleForDpi(RowGapDesign)
+        Dim Y As Integer = ScaleForDpi(CardTopDesign)
+
+        SpandrelModelInfoLabel.AutoSize = False
+        SpandrelModelInfoLabel.Height = ScaleForDpi(34)
+        SpandrelTilingBadge.Height = ScaleForDpi(24)
+
+        Dim Rows As Object()() = {
+            New Object() {New Object() {Label26, WidthNatural}, New Object() {PyModel, WidthFill},
+                          New Object() {BrowseOpenModelDbButton, 112}, New Object() {RefreshSpandrelModelsButton, 94}},
+            New Object() {New Object() {SpandrelModelInfoLabel, WidthFill}, New Object() {SpandrelTilingBadge, 190}},
+            New Object() {New Object() {SpandrelScanStatusLabel, WidthFill}},
+            New Object() {New Object() {Label25, WidthNatural}, New Object() {PyTileSize, 130},
+                          New Object() {PyCPU, WidthNatural}, New Object() {Nothing, WidthFill},
+                          New Object() {PyPrecisionLabel, WidthNatural}, New Object() {PyPrecisionComboBox, 170}},
+            New Object() {New Object() {TileSizeHint, WidthFill}},
+            New Object() {New Object() {PyNormalMapModeLabel, WidthNatural}, New Object() {PyNormalMapModeComboBox, WidthFill}},
+            New Object() {New Object() {AutoArchitectModelLabel, WidthNatural}, New Object() {AutoArchitectModelComboBox, WidthFill}},
+            New Object() {New Object() {AutoPainterModelLabel, WidthNatural}, New Object() {AutoPainterModelComboBox, WidthFill}},
+            New Object() {New Object() {AutoPainterShareLabel, WidthNatural}, New Object() {AutoPainterSharePercent, 80},
+                          New Object() {AutoPainterShareSuffix, WidthNatural}, New Object() {AutoPainterThresholdLabel, WidthNatural},
+                          New Object() {AutoPainterThreshold, 80}, New Object() {AutoPainterThresholdSuffix, WidthFill}},
+            New Object() {New Object() {AutoRoutePreviewButton, WidthNatural}, New Object() {AutoRoutePreviewSampleLabel, WidthNatural},
+                          New Object() {AutoRoutePreviewSampleCount, 70}, New Object() {AutoRoutePreviewStatusLabel, WidthFill}}
+        }
+
+        Dim Used As Boolean = False
+        For Each Row As Object() In Rows
+            Dim Height As Integer = LayoutControlRow(Row, Left, Right, Y)
+            If Height > 0 Then
+                Y += Height + Gap
+                Used = True
+            End If
+        Next
+        Return Y - Gap + ScaleForDpi(CardInsetDesign)
+    End Function
+
+    Private Sub LayoutMainWindow()
+        Dim Margin As Integer = ScaleForDpi(LayoutMarginDesign)
+        Dim Gap As Integer = ScaleForDpi(LayoutGapDesign)
+        Dim ClientWidth As Integer = ClientSize.Width
+        Dim ClientHeight As Integer = ClientSize.Height
+
+        ' Top: tabs across the full width.
+        TabGroup.Anchor = AnchorStyles.Top Or AnchorStyles.Left
+        TabGroup.SetBounds(Margin, Margin, Math.Max(1, ClientWidth - 2 * Margin), TabGroup.Height)
+        Dim ContentTop As Integer = TabGroup.Bottom + Gap
+
+        ' Bottom: the two action buttons, left-aligned.
+        Dim ButtonHeight As Integer = Math.Max(RunOnceButton.Height, WatchDogButton.Height)
+        Dim ActionTop As Integer = ClientHeight - Margin - ButtonHeight
+        RunOnceButton.Anchor = AnchorStyles.Top Or AnchorStyles.Left
+        WatchDogButton.Anchor = AnchorStyles.Top Or AnchorStyles.Left
+        RunOnceButton.Location = New Point(Margin, ActionTop)
+        WatchDogButton.Location = New Point(RunOnceButton.Right + Gap, ActionTop)
+
+        Dim ContentBottom As Integer = ActionTop - Gap
+        Dim ContentHeight As Integer = Math.Max(ContentBottom - ContentTop, ScaleForDpi(PyGroupDesignHeight))
+
+        ' Left: program settings.
+        SettingsGroup.Anchor = AnchorStyles.Top Or AnchorStyles.Left
+        SettingsGroup.SetBounds(Margin, ContentTop, SettingsGroup.Width,
+                                Math.Max(ContentHeight, ScaleForDpi(SettingsGroupDesignHeight)))
+
+        ' Right: the backend panel. Only the selected backend is visible.
+        Dim PanelLeft As Integer = SettingsGroup.Right + Gap
+        Dim PanelWidth As Integer = Math.Max(ScaleForDpi(PyGroupDesignWidth), ClientWidth - Margin - PanelLeft)
+        For Each Panel As GroupBox In New GroupBox() {CaffeGroup, VulkanGroup, WaifuCPPGroup, AnimeCPPGroup, DDxGroup, xBRZGroup, PyGroup}
+            Panel.Anchor = AnchorStyles.Top Or AnchorStyles.Left
+            Panel.SetBounds(PanelLeft, ContentTop, PanelWidth, ContentHeight)
+        Next
+
+        Dim CardHeight As Integer = LayoutSpandrelCard(PyGroup.ClientSize.Width)
+        PyModel.DropDownWidth = Math.Min(500, Math.Max(1, PyModel.Width))
+
+        ' Minimum window size: the smallest client area in which the same layout still fits.
+        Dim MinClientWidth As Integer = Margin + SettingsGroup.Width + Gap + ScaleForDpi(PyGroupDesignWidth) + Margin
+        Dim MinContentHeight As Integer = Math.Max(Math.Max(CardHeight, ScaleForDpi(PyGroupDesignHeight)),
+                                                   ScaleForDpi(SettingsGroupDesignHeight))
+        Dim MinClientHeight As Integer = ContentTop + MinContentHeight + Gap + ButtonHeight + Margin
+        Dim Chrome As New Size(Width - ClientWidth, Height - ClientHeight)
+        MinimumSize = New Size(MinClientWidth + Chrome.Width, MinClientHeight + Chrome.Height)
+    End Sub
+
     Private Sub ApplyResponsiveLayout()
         If IsApplyingResponsiveLayout OrElse ClientSize.Width <= 0 OrElse ClientSize.Height <= 0 Then Return
         IsApplyingResponsiveLayout = True
         Try
-            Dim ClientWidth As Integer = ClientSize.Width
-            Dim ClientHeight As Integer = ClientSize.Height
-            TabGroup.Width = Math.Max(ResponsiveTabMinimumWidth, ClientWidth - TabGroup.Left - ResponsiveTabRightMargin)
-            ' Action buttons sit at the bottom; the settings panel always ends above them.
-            Dim ActionTop As Integer = ClientHeight - ResponsiveActionBottomMargin - Math.Max(RunOnceButton.Height, WatchDogButton.Height)
-            RunOnceButton.Top = ActionTop
-            WatchDogButton.Top = ActionTop
-            SettingsGroup.Height = Math.Max(ResponsiveSettingsMinimumHeight, ActionTop - ScaleForDpi(10) - SettingsGroup.Top)
-
-            SettingsLoc = New Point(SettingsGroup.Right + 16, SettingsGroup.Top)
-            Dim PanelWidth As Integer = Math.Max(ResponsivePanelMinimumWidth, ClientWidth - SettingsLoc.X - ResponsivePanelRightMargin)
-            For Each Panel As GroupBox In New GroupBox() {CaffeGroup, VulkanGroup, WaifuCPPGroup, AnimeCPPGroup, DDxGroup, xBRZGroup, PyGroup}
-                Dim MinimumPanelHeight As Integer = ResponsivePanelMinimumHeights(Panel)
-                Dim PanelBottomMargin As Integer = ResponsivePanelBottomMargins(Panel)
-                Panel.Location = SettingsLoc
-                Panel.Size = New Size(PanelWidth, Math.Max(MinimumPanelHeight, ClientHeight - SettingsLoc.Y - PanelBottomMargin))
-            Next
-
             Dim IsSpandrelSelected As Boolean = String.Equals(If(ExeComboBox.SelectedItem, "").ToString(), SpandrelBackendName, StringComparison.OrdinalIgnoreCase)
-            LayoutOpenModelDbControls()
-            LayoutSpandrelVerticalStack()
             LayoutSpandrelModelCard(IsSpandrelSelected)
-            LayoutSpandrelResponsiveControls()
+            LayoutMainWindow()
         Finally
             IsApplyingResponsiveLayout = False
         End Try
