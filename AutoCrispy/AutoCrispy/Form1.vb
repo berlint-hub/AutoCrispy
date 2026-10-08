@@ -2260,10 +2260,14 @@ Public Class Form1
             CancelToken)
         CancelToken.ThrowIfCancellationRequested()
         Dim DownloadedFullPath As String = Path.GetFullPath(DownloadedPath)
-        Dim ValidatedModel As SpandrelModelInfo = DetectedModels.FirstOrDefault(Function(Model As SpandrelModelInfo)
-            Not Model.IsAutoTextureRouter AndAlso
-            String.Equals(Path.GetFullPath(Model.FilePath), DownloadedFullPath, StringComparison.OrdinalIgnoreCase) AndAlso
-            Model.Scale = Item.Scale AndAlso Model.InputChannels = 3 AndAlso Model.OutputChannels = 3)
+        Dim ValidatedModel As SpandrelModelInfo = Nothing
+        For Each Candidate As SpandrelModelInfo In DetectedModels
+            If Candidate.IsAutoTextureRouter Then Continue For
+            If Not String.Equals(Path.GetFullPath(Candidate.FilePath), DownloadedFullPath, StringComparison.OrdinalIgnoreCase) Then Continue For
+            If Candidate.Scale <> Item.Scale OrElse Candidate.InputChannels <> 3 OrElse Candidate.OutputChannels <> 3 Then Continue For
+            ValidatedModel = Candidate
+            Exit For
+        Next
         If ValidatedModel Is Nothing Then
             Throw New InvalidDataException(
                 "The checkpoint did not pass AutoCrispy's Spandrel check for " & Item.Scale.ToString() & "× RGB inference. It was not installed.")
@@ -2276,22 +2280,24 @@ Public Class Form1
         Dim PartialPath As String = Path.Combine(DestinationFolder, ".openmodeldb-" & Guid.NewGuid().ToString("N") & ".part")
         If ReportStatus IsNot Nothing Then ReportStatus("Checkpoint passed Spandrel validation. Installing into the shared models folder…")
         Try
-            Await Task.Run(Sub()
-                Using SourceStream As New FileStream(DownloadedPath, FileMode.Open, FileAccess.Read, FileShare.Read)
-                    Using DestinationStream As New FileStream(PartialPath, FileMode.CreateNew, FileAccess.Write, FileShare.None)
-                        Dim Buffer(1024 * 1024 - 1) As Byte
-                        While True
-                            CancelToken.ThrowIfCancellationRequested()
-                            Dim BytesRead As Integer = SourceStream.Read(Buffer, 0, Buffer.Length)
-                            If BytesRead <= 0 Then Exit While
-                            DestinationStream.Write(Buffer, 0, BytesRead)
-                        End While
-                        DestinationStream.Flush(True)
+            Await Task.Run(
+                Sub()
+                    Using SourceStream As New FileStream(DownloadedPath, FileMode.Open, FileAccess.Read, FileShare.Read)
+                        Using DestinationStream As New FileStream(PartialPath, FileMode.CreateNew, FileAccess.Write, FileShare.None)
+                            Dim Buffer(1024 * 1024 - 1) As Byte
+                            While True
+                                CancelToken.ThrowIfCancellationRequested()
+                                Dim BytesRead As Integer = SourceStream.Read(Buffer, 0, Buffer.Length)
+                                If BytesRead <= 0 Then Exit While
+                                DestinationStream.Write(Buffer, 0, BytesRead)
+                            End While
+                            DestinationStream.Flush(True)
+                        End Using
                     End Using
-                End Using
-                CancelToken.ThrowIfCancellationRequested()
-                File.Move(PartialPath, FinalPath)
-            End Sub, CancelToken)
+                    CancelToken.ThrowIfCancellationRequested()
+                    File.Move(PartialPath, FinalPath)
+                End Sub,
+                CancelToken)
             Return FinalPath
         Catch
             Try
