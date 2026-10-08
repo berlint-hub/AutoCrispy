@@ -33,6 +33,7 @@ Public Class Form1
     Private ReadOnly ResponsivePanelMinimumHeights As New Dictionary(Of GroupBox, Integer)
     Private ReadOnly ResponsivePanelBottomMargins As New Dictionary(Of GroupBox, Integer)
     Private AutoRoutePreviewHasResult As Boolean = False
+    Private LastChainPreviewTooltip As String = String.Empty
     Private ReadOnly UiToolTip As New ToolTip()
     Private ReadOnly SpandrelTilingBadge As New System.Windows.Forms.Label()
     Private ReadOnly GamePathProfiles As New BindingList(Of FormSettings.GamePathProfile)
@@ -351,6 +352,13 @@ Public Class Form1
 
     Private Sub Form1_Resize(sender As Object, e As EventArgs) Handles MyBase.Resize
         If Not IsResponsiveLayoutReady OrElse IsApplyingResponsiveLayout Then Return
+        ApplyResponsiveLayout()
+    End Sub
+
+    Private Sub Form1_DpiChanged(sender As Object, e As DpiChangedEventArgs) Handles MyBase.DpiChanged
+        If Not IsResponsiveLayoutReady Then Return
+        ' WinForms scales controls automatically; refresh the cached margins so later resizes do not reuse old-DPI coordinates.
+        ConfigureResponsiveLayout()
         ApplyResponsiveLayout()
     End Sub
 
@@ -1156,6 +1164,19 @@ Public Class Form1
             ChainList = TempList
             ChainControl.ReorderList()
         End If
+    End Sub
+
+    Private Sub ChainPreview_MouseMove(sender As Object, e As MouseEventArgs) Handles ChainPreview.MouseMove
+        If ChainControl Is Nothing Then Return
+        Dim ItemName As String = ChainControl.GetItemNameAt(e.Location)
+        If String.Equals(ItemName, LastChainPreviewTooltip, StringComparison.Ordinal) Then Return
+        LastChainPreviewTooltip = ItemName
+        UiToolTip.SetToolTip(ChainPreview, ItemName)
+    End Sub
+
+    Private Sub ChainPreview_MouseLeave(sender As Object, e As EventArgs) Handles ChainPreview.MouseLeave
+        LastChainPreviewTooltip = String.Empty
+        UiToolTip.SetToolTip(ChainPreview, String.Empty)
     End Sub
 
     Private Sub DDxFormatListBox_SelectedIndexChanged(sender As Object, e As EventArgs) Handles DDxFormatListBox.SelectedIndexChanged

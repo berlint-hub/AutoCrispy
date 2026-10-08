@@ -13,7 +13,7 @@ Public Class DragDropList
     Private ColumnsPerRow As Integer
     Private ThumbSize As Integer
     Private Const ItemPadding As Integer = 10
-    Private Const CaptionHeight As Integer = 32
+    Private Const CaptionHeight As Integer = 24
 
     Private ClickedIndex As Integer
     Private CurrentIndex As Integer
@@ -98,6 +98,13 @@ Public Class DragDropList
         Return ClickedIndex
     End Function
 
+    Public Function GetItemNameAt(LocalPosition As Point) As String
+        Dim HitIndex As Integer = HitTestIndex(LocalPosition)
+        If HitIndex < 0 OrElse HitIndex >= ListItems.Count Then Return String.Empty
+        If IsDragging AndAlso HitIndex < TempListItems.Count Then Return TempListItems(HitIndex).Name
+        Return ListItems(HitIndex).Name
+    End Function
+
     Private Function HitTestIndex(LocalPosition As Point) As Integer
         If ListItems.Count = 0 OrElse ThumbSize <= 0 OrElse ColumnsPerRow <= 0 Then Return -1
         If LocalPosition.X < 0 OrElse LocalPosition.X >= ImageWidth OrElse LocalPosition.Y < 0 OrElse LocalPosition.Y >= ImageHeight Then Return -1
@@ -127,6 +134,11 @@ Public Class DragDropList
     End Function
 
     Public Sub DrawList(ItemList As List(Of DragDropItem))
+        If ListCanvas Is Nothing Then Return
+        ImageWidth = ListCanvas.ClientSize.Width
+        ImageHeight = ListCanvas.ClientSize.Height
+        If ImageWidth <= 0 OrElse ImageHeight <= 0 Then Return
+
         Dim PreviousListImage As Bitmap = ListImage
         ColumnsPerRow = Math.Max(1, Math.Min(ThumbsPerRow, Math.Max(1, ItemList.Count)))
         Dim RowCount As Integer = Math.Max(1, CInt(Math.Ceiling(ItemList.Count / CDbl(ColumnsPerRow))))
@@ -143,8 +155,8 @@ Public Class DragDropList
                 Using CaptionFormat As New StringFormat With {
                     .LineAlignment = StringAlignment.Center,
                     .Alignment = StringAlignment.Center,
-                    .Trimming = StringTrimming.EllipsisWord,
-                    .FormatFlags = StringFormatFlags.LineLimit
+                    .Trimming = StringTrimming.EllipsisCharacter,
+                    .FormatFlags = StringFormatFlags.NoWrap
                 }
                     For ItemIndex As Integer = 0 To ItemList.Count - 1
                         Dim BaseX As Integer = ItemIndex Mod ColumnsPerRow
