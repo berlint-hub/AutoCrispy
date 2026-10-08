@@ -4108,7 +4108,7 @@ Public Class Form1
                 CompletedLogStream.Write(RecordBytes, 0, RecordBytes.Length)
                 CompletedLogStream.Flush()
             End Using
-            If LoadedSettings IsNot Nothing AndAlso LoadedSettings.ExpertSettings.ClearInput AndAlso File.Exists(FullInputPath) Then
+            If LoadedSettings.ExpertSettings.ClearInput AndAlso File.Exists(FullInputPath) Then
                 File.Delete(FullInputPath)
             End If
             Checkpoint.InProgress.RemoveAll(Function(Candidate As BatchResumeEntry) _
@@ -4169,7 +4169,7 @@ Public Class Form1
         For Each Entry As BatchResumeEntry In Checkpoint.InProgress
             Dim FullInputPath As String = Path.GetFullPath(Entry.InputPath)
             If CompletedEntryKeys.Contains(GetResumeEntryKey(Entry.AttemptId, FullInputPath)) Then
-                If LoadedSettings IsNot Nothing AndAlso LoadedSettings.ExpertSettings.ClearInput AndAlso File.Exists(FullInputPath) Then
+                If LoadedSettings.ExpertSettings.ClearInput AndAlso File.Exists(FullInputPath) Then
                     Try
                         File.Delete(FullInputPath)
                     Catch ex As Exception
