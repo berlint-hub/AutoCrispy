@@ -19,6 +19,8 @@ Public Class Form1
     Private LastSelectedSpandrelModelPath As String = ""
     Private LastSelectedArchitectModelPath As String = ""
     Private LastSelectedPainterModelPath As String = ""
+    Private SpandrelPrecisionBaseWidth As Integer
+    Private SpandrelLayoutBaseDpi As Integer = 96
     Private IsUpdatingAutoRouteModelSelectors As Boolean = False
     Private IsUpdatingPrecisionSelection As Boolean
     Private IsResponsiveLayoutReady As Boolean
@@ -345,6 +347,7 @@ Public Class Form1
 
             Dim IsSpandrelSelected As Boolean = String.Equals(If(ExeComboBox.SelectedItem, "").ToString(), SpandrelBackendName, StringComparison.OrdinalIgnoreCase)
             LayoutSpandrelModelCard(IsSpandrelSelected)
+            LayoutSpandrelResponsiveControls()
         Finally
             IsApplyingResponsiveLayout = False
         End Try
@@ -1492,6 +1495,8 @@ Public Class Form1
     End Sub
 
     Private Sub InitializeSpandrelModelCard()
+        SpandrelPrecisionBaseWidth = PyPrecisionComboBox.Width
+        SpandrelLayoutBaseDpi = Math.Max(1, PyGroup.DeviceDpi)
         SpandrelTilingBadge.Name = "SpandrelTilingBadge"
         SpandrelTilingBadge.AccessibleName = "Model tiling policy"
         SpandrelTilingBadge.AutoEllipsis = True
@@ -1533,6 +1538,65 @@ Public Class Form1
         Else
             SpandrelModelInfoLabel.Width = AvailableWidth
         End If
+    End Sub
+
+    Private Sub LayoutSpandrelResponsiveControls()
+        If PyGroup Is Nothing OrElse PyGroup.ClientSize.Width <= 0 Then Return
+
+        Dim ClientWidth As Integer = PyGroup.ClientSize.Width
+        Dim RightMargin As Integer = Math.Max(4, PyGroup.Padding.Right + 2)
+        Dim LabelGap As Integer = Math.Max(4, PyNormalMapModeComboBox.Left - PyNormalMapModeLabel.Right)
+        Dim PrecisionLabelWidth As Integer = Math.Max(
+            PyPrecisionLabel.Width,
+            TextRenderer.MeasureText(PyPrecisionLabel.Text, PyPrecisionLabel.Font).Width
+        )
+        Dim PreferredPrecisionWidth As Integer = Math.Max(
+            1,
+            CInt(Math.Round(SpandrelPrecisionBaseWidth * PyGroup.DeviceDpi / CDbl(Math.Max(1, SpandrelLayoutBaseDpi))))
+        )
+        Dim PrecisionWidth As Integer = Math.Min(
+            PreferredPrecisionWidth,
+            Math.Max(1, ClientWidth - RightMargin - PrecisionLabelWidth - LabelGap)
+        )
+        Dim PrecisionLeft As Integer = ClientWidth - RightMargin - PrecisionWidth - LabelGap - PrecisionLabelWidth
+        Dim CanKeepPrecisionBesideTileSize As Boolean = PrecisionLeft >= PyCPU.Right + (2 * LabelGap)
+        Dim CanShareNormalMapRow As Boolean = PyNormalMapModeComboBox.Visible AndAlso PyPrecisionComboBox.Visible
+
+        If CanKeepPrecisionBesideTileSize OrElse Not CanShareNormalMapRow Then
+            PyPrecisionComboBox.Size = New Size(PrecisionWidth, PyPrecisionComboBox.Height)
+            PyPrecisionComboBox.Location = New Point(ClientWidth - RightMargin - PrecisionWidth, PyTileSize.Top)
+            PyPrecisionLabel.Location = New Point(
+                PrecisionLeft,
+                PyTileSize.Top + Math.Max(0, (PyTileSize.Height - PyPrecisionLabel.Height) \ 2)
+            )
+            If PyNormalMapModeComboBox.Visible Then
+                PyNormalMapModeComboBox.Width = Math.Max(1, ClientWidth - PyNormalMapModeComboBox.Left - RightMargin)
+                PyNormalMapModeComboBox.DropDownWidth = Math.Max(260, Math.Min(320, PyNormalMapModeComboBox.Width))
+            End If
+            Return
+        End If
+
+        ' On narrower forms share the Normal Map row: this keeps Precision away from CPU only
+        ' and lets both dropdowns shrink safely instead of painting over neighbouring controls.
+        Dim NormalMapLeft As Integer = PyNormalMapModeLabel.Right + LabelGap
+        Dim PrecisionRowTop As Integer = PyNormalMapModeComboBox.Top
+        Dim AvailableWidth As Integer = Math.Max(2, ClientWidth - RightMargin - NormalMapLeft)
+        Dim ComboSpace As Integer = Math.Max(2, AvailableWidth - (2 * LabelGap) - PrecisionLabelWidth)
+        Dim NormalMapWidth As Integer = Math.Max(1, CInt(Math.Floor(ComboSpace * 0.6)))
+        Dim CompactPrecisionWidth As Integer = Math.Max(1, ComboSpace - NormalMapWidth)
+        PyNormalMapModeComboBox.Location = New Point(NormalMapLeft, PrecisionRowTop)
+        PyNormalMapModeComboBox.Size = New Size(NormalMapWidth, PyNormalMapModeComboBox.Height)
+        PyNormalMapModeComboBox.DropDownWidth = Math.Max(260, Math.Min(320, PyNormalMapModeComboBox.Width))
+
+        PrecisionLeft = PyNormalMapModeComboBox.Right + LabelGap
+        PyPrecisionLabel.Location = New Point(
+            PrecisionLeft,
+            PrecisionRowTop + Math.Max(0, (PyNormalMapModeComboBox.Height - PyPrecisionLabel.Height) \ 2)
+        )
+        Dim CompactPrecisionLeft As Integer = PrecisionLeft + PrecisionLabelWidth + LabelGap
+        CompactPrecisionWidth = Math.Max(1, ClientWidth - RightMargin - CompactPrecisionLeft)
+        PyPrecisionComboBox.Location = New Point(CompactPrecisionLeft, PrecisionRowTop)
+        PyPrecisionComboBox.Size = New Size(CompactPrecisionWidth, PyPrecisionComboBox.Height)
     End Sub
 
     Private Sub SetSpandrelTilingBadge(Text As String, Background As System.Drawing.Color,
@@ -1611,55 +1675,43 @@ Public Class Form1
 
     Private Sub ApplyPrecisionCompatibilityHint(BaseTilingHint As String, PrecisionSupportKnown As Boolean,
                                                  SupportsFP16 As Boolean, SwitchedToAuto As Boolean)
+        TileSizeHint.Text = BaseTilingHint
+        TileSizeHint.BackColor = System.Drawing.Color.Transparent
+        TileSizeHint.Padding = Padding.Empty
+        PyPrecisionLabel.Text = "Precision:"
+        PyPrecisionLabel.ForeColor = System.Drawing.SystemColors.ControlText
+        PyPrecisionComboBox.BackColor = System.Drawing.SystemColors.Window
+
         If Not PrecisionSupportKnown Then
-            TileSizeHint.Text = BaseTilingHint
-            TileSizeHint.BackColor = System.Drawing.Color.Transparent
-            TileSizeHint.Padding = Padding.Empty
             UiToolTip.SetToolTip(TileSizeHint, BaseTilingHint)
-            PyPrecisionComboBox.BackColor = System.Drawing.SystemColors.Window
+            UiToolTip.SetToolTip(PyPrecisionLabel, "Inference precision selection.")
+            LayoutSpandrelResponsiveControls()
             Return
         End If
 
-        Dim PrecisionHint As String = ""
-        Dim PrecisionTooltip As String = ""
+        Dim PrecisionTooltip As String
         If Not SupportsFP16 Then
-            If SwitchedToAuto Then
-                PrecisionHint = "FP16 unavailable · switched to Auto (FP32)."
-            ElseIf PyPrecisionComboBox.SelectedIndex = 2 Then
-                PrecisionHint = "FP16 unavailable · FP32 selected."
-            Else
-                PrecisionHint = "FP16 unavailable · Auto uses FP32."
-            End If
             If SwitchedToAuto Then
                 PrecisionTooltip = "This checkpoint does not advertise FP16 support. The selection was reset to Auto; Auto uses FP32 for this model."
             Else
                 PrecisionTooltip = "This checkpoint does not advertise FP16 support. Auto uses FP32; selecting FP16 switches back to Auto."
             End If
-            TileSizeHint.ForeColor = System.Drawing.Color.FromArgb(133, 83, 0)
-            TileSizeHint.BackColor = System.Drawing.Color.FromArgb(255, 244, 214)
-            TileSizeHint.Padding = New Padding(4, 0, 4, 0)
+            PyPrecisionLabel.Text = "Precision (FP32):"
+            PyPrecisionLabel.ForeColor = System.Drawing.Color.FromArgb(133, 83, 0)
             PyPrecisionComboBox.BackColor = System.Drawing.Color.FromArgb(255, 244, 214)
         Else
-            If PyCPU.Checked Then
-                PrecisionHint = "CPU inference uses FP32."
-            ElseIf PyPrecisionComboBox.SelectedIndex = 1 Then
-                PrecisionHint = "FP16 selected."
-            ElseIf PyPrecisionComboBox.SelectedIndex = 2 Then
-                PrecisionHint = "FP32 selected."
-            Else
-                PrecisionHint = "Auto selects FP16 on CUDA."
-            End If
             PrecisionTooltip = "This checkpoint advertises FP16 support." & Environment.NewLine &
                 "Auto uses FP16 on CUDA; FP32 remains available for maximum compatibility."
-            TileSizeHint.ForeColor = System.Drawing.Color.FromArgb(57, 95, 73)
-            TileSizeHint.BackColor = System.Drawing.Color.FromArgb(234, 245, 238)
-            TileSizeHint.Padding = New Padding(4, 0, 4, 0)
-            PyPrecisionComboBox.BackColor = System.Drawing.SystemColors.Window
+            If PyCPU.Checked Then
+                PyPrecisionLabel.Text = "Precision (FP32):"
+                PrecisionTooltip &= Environment.NewLine & "CPU inference always uses FP32."
+            End If
         End If
 
-        TileSizeHint.Text = PrecisionHint & " " & BaseTilingHint
         UiToolTip.SetToolTip(TileSizeHint, PrecisionTooltip & Environment.NewLine & BaseTilingHint)
         UiToolTip.SetToolTip(PyPrecisionComboBox, PrecisionTooltip)
+        UiToolTip.SetToolTip(PyPrecisionLabel, PrecisionTooltip)
+        LayoutSpandrelResponsiveControls()
     End Sub
 
     Private Sub PyPrecisionComboBox_SelectedIndexChanged(sender As Object, e As EventArgs)
@@ -1698,6 +1750,7 @@ Public Class Form1
         PyNormalMapModeComboBox.Enabled = UsesSpandrelRunner
         SpandrelModelInfoLabel.Visible = IsSpandrelSelected
         LayoutSpandrelModelCard(IsSpandrelSelected)
+        LayoutSpandrelResponsiveControls()
         SpandrelScanStatusLabel.Visible = IsSpandrelSelected
         RefreshSpandrelModelsButton.Visible = IsSpandrelSelected
         PyTileSize.Enabled = True
