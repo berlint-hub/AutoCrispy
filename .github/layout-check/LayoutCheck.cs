@@ -130,12 +130,12 @@ internal static class LayoutCheck
                 }
 
                 Note(form, scaleLabel);
-                foreach (Size size in WindowSizes)
+                foreach (Size requested in WindowSizes)
                 {
-                    form.Size = size;
+                    form.Size = requested;
                     Pump(250);
                     // The window may be clamped to its minimum; always check what is really shown.
-                    size = form.Size;
+                    Size size = form.Size;
                     Visit(form, scaleLabel + " window " + size.Width + "x" + size.Height);
                     SaveScreenshot(form, scaleLabel, size);
                 }
