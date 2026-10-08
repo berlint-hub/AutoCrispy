@@ -1,6 +1,6 @@
 # AutoCrispy — persistent development handoff
 
-_Last updated: 2026-10-07 (Europe/Prague). Read this before continuing repository work._
+_Last updated: 2026-10-08 (Europe/Prague). Read this before continuing repository work._
 
 ## Repository and branch
 
@@ -8,6 +8,12 @@ _Last updated: 2026-10-07 (Europe/Prague). Read this before continuing repositor
 - Arena work must stay on `arena/1924e580-autocrispy`; do not switch to, create, or push another branch, and never push these changes to `master`.
 - The route-preview/tuning implementation is on `8865f25` (`Fix route preview Painter count compilation`); Windows Actions passed: [37652638723](https://github.com/berlint-hub/AutoCrispy/actions/runs/37652638723). The previous handoff-note base was `310f327`.
 - The user has authorized pushing their changes to this Arena branch to trigger GitHub Actions. Do not create an issue for an audit; if offering code upstream, ask the maintainer whether they want to use it.
+
+## Release status (2026-10-08)
+
+- **Spandrel main-window layout: GOLD RELEASE.** The user confirmed everything works well. The old responsive code was replaced by a single layout engine (`ApplyResponsiveLayout` / `LayoutMainWindow` / `LayoutSpandrelCard` in `AutoCrispy/AutoCrispy/Form1.vb`) that sets a computed `MinimumSize`, so Spandrel controls (Catalog…/Refresh, the EXTERNAL TILING OK badge, the model info bar) no longer overlap at 100/125/150% or when resized. Verified by the layout check in CI, run [37796492956](https://github.com/berlint-hub/AutoCrispy/actions/runs/37796492956) (success, zero overlaps or clipping).
+- Keep the layout check in `.github/layout-check/LayoutCheck.cs` passing before changing any main-window layout code.
+- The open stop/cancellation issue below is still unresolved.
 
 ## Completed work
 
