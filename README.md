@@ -9,7 +9,7 @@ Automatically apply AI upscaling on Dumped Textures.
 
    - Defringing - Basic, GDI+ defringing scheme.  Removes ugly halo artifacts ('fringes') from textures with transparency.  This works best where all textures are roughly the same size.
 
-   - Crash-safe batch resume - AutoCrispy records the currently processing batch in the user's local app data. After an unexpected shutdown, click **Resume batch** to remove partial outputs and retry that batch; earlier completed batches remain untouched.
+   - Crash-safe batch resume - AutoCrispy records in-progress textures in the user's local app data. After an unexpected shutdown, click **Resume batch** to keep confirmed outputs and safely retry unfinished work. Backends that only report completion for a whole batch may still need that active batch retried.
 
 ## Backend Features
 

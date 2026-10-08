@@ -825,6 +825,11 @@ def _preview_auto_route(args: argparse.Namespace) -> int:
     return 0
 
 
+def _report_texture_completed(input_path: Path) -> None:
+    encoded_name = base64.b64encode(input_path.name.encode("utf-8")).decode("ascii")
+    print(f"AUTOCRISPY_TEXTURE_COMPLETED: {encoded_name}", flush=True)
+
+
 def _run_auto_route(args: argparse.Namespace) -> int:
     if not args.input.is_dir():
         raise NotADirectoryError(f"Input folder not found: {args.input}")
@@ -936,6 +941,7 @@ def _run_auto_route(args: argparse.Namespace) -> int:
             f"AUTOCRISPY_RESULT: {index}/{len(files)} · {role} · {input_path.name} · OK",
             flush=True,
         )
+        _report_texture_completed(input_path)
 
     print(f"Auto-routed and upscaled {len(files)} image(s).", flush=True)
     return 0
@@ -1072,6 +1078,7 @@ def run(args: argparse.Namespace) -> int:
             f"AUTOCRISPY_RESULT: {index}/{len(files)} · Upscaling · {input_path.name} · OK",
             flush=True,
         )
+        _report_texture_completed(input_path)
 
     print(f"Upscaled {len(files)} image(s).")
     return 0

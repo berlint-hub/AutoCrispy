@@ -546,6 +546,12 @@ class SpandrelRunnerTests(unittest.TestCase):
             self.assertIn(f"Painter={painter_path.resolve()}", log)
             self.assertIn("AUTOCRISPY_RESULT: 1/3 · Architect · a-architect.png · OK", log)
             self.assertIn("AUTOCRISPY_RESULT: 3/3 · Painter · z-painter.png · OK", log)
+            completed_names = {
+                base64.b64decode(line.split(":", 1)[1].strip()).decode("utf-8")
+                for line in log.splitlines()
+                if line.startswith("AUTOCRISPY_TEXTURE_COMPLETED:")
+            }
+            self.assertEqual(completed_names, {"a-architect.png", "n-architect.png", "z-painter.png"})
 
     def test_single_model_runner_recursively_preserves_relative_output_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -593,6 +599,14 @@ class SpandrelRunnerTests(unittest.TestCase):
             self.assertNotIn(stale_output, [source for source, _ in outputs])
             self.assertIn("AUTOCRISPY_PROGRESS: 1/1 · Upscaling · stone.png", output.getvalue())
             self.assertIn("AUTOCRISPY_RESULT: 1/1 · Upscaling · stone.png · OK", output.getvalue())
+            completed_line = next(
+                line for line in output.getvalue().splitlines()
+                if line.startswith("AUTOCRISPY_TEXTURE_COMPLETED:")
+            )
+            self.assertEqual(
+                base64.b64decode(completed_line.split(":", 1)[1].strip()).decode("utf-8"),
+                "stone.png",
+            )
 
     def test_image_discovery_keeps_images_when_output_is_a_parent_folder(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -130,12 +130,13 @@ Public Class Form1
     End Class
 
     Public Class BatchResumeCheckpoint
-        Public Property Version As Integer = 1
+        Public Property Version As Integer = 2
         Public Property InProgress As New List(Of BatchResumeEntry)
     End Class
 
     Public Class BatchResumeEntry
         Public Property InputPath As String = String.Empty
+        Public Property AttemptId As String = String.Empty
         Public Property OutputExtensions As New List(Of String)
     End Class
 
@@ -2405,7 +2406,7 @@ Public Class Form1
             If Not WorkHorse.IsBusy AndAlso Not WatchDog.Enabled AndAlso WatchDogButton.Enabled Then
                 If Progress.TotalCount > 0 AndAlso Progress.DoneCount < Progress.TotalCount Then
                     WatchDogButton.Text = "Resume batch"
-                    UiToolTip.SetToolTip(WatchDogButton, "Resume unfinished textures. Earlier completed batches are kept; outputs from the interrupted batch are safely retried.")
+                    UiToolTip.SetToolTip(WatchDogButton, "Resume unfinished textures. Successfully checkpointed outputs are kept; unconfirmed outputs are safely retried.")
                 ElseIf WatchDogButton.Text <> "Stopping..." Then
                     WatchDogButton.Text = "Running: False"
                     UiToolTip.SetToolTip(WatchDogButton, "Start or stop the texture watcher.")
@@ -2627,6 +2628,10 @@ Public Class Form1
                 )
                 MarkBatchInProgress(LoadedSettings.Paths.OutputPath, ResumeCheckpoint, CopiedInputs, BatchOutputExtensions)
             End If
+            Dim OriginalInputByStem As New Dictionary(Of String, String)(StringComparer.OrdinalIgnoreCase)
+            For Each CopiedInput As String In CopiedInputs
+                OriginalInputByStem(Path.GetFileNameWithoutExtension(CopiedInput)) = Path.GetFullPath(CopiedInput)
+            Next
 
             Dim BatchFiles As String() = Directory.GetFiles(TempPath)
             Array.Sort(BatchFiles, StringComparer.OrdinalIgnoreCase)
@@ -2634,6 +2639,9 @@ Public Class Form1
             For Each CopiedInput As String In CopiedInputs
                 StageCounts(Path.GetFileNameWithoutExtension(CopiedInput)) = 0
             Next
+            Dim FinalOutputExtensions As HashSet(Of String) = GetExpectedOutputExtensions(
+                CopiedInputs, ChainList(ChainList.Count - 1).Package)
+            Dim FinalOutputsForBatch As New Dictionary(Of String, String)(StringComparer.OrdinalIgnoreCase)
             Dim BatchDescription As String = "no images matched the current alpha settings"
             If BatchFiles.Length > 0 Then
                 BatchDescription = Path.GetFileName(BatchFiles(0))
@@ -2682,7 +2690,21 @@ Public Class Form1
                     End If
                 Next
 
-                StartBuilder(ChainPaths(0), ChainPaths(1), NewImages, Model)
+                Dim IsFinalStage As Boolean = StageIndex = ChainList.Count
+                Dim CompletedTextureCallback As Action(Of String) = Nothing
+                If IsFinalStage AndAlso IsSpandrelPackageType(Model.PackageType) AndAlso
+                    Not LoadedSettings.BasicSettings.Defringe AndAlso
+                    LoadedSettings.ExpertSettings.SeamlessMode <= 0 AndAlso
+                    Not LoadedSettings.BasicSettings.FixPS2 Then
+                    CompletedTextureCallback = Sub(CompletedImageName As String)
+                        Dim CompletedStem As String = Path.GetFileNameWithoutExtension(CompletedImageName)
+                        Dim OriginalInputPath As String = Nothing
+                        If OriginalInputByStem.TryGetValue(CompletedStem, OriginalInputPath) Then
+                            MarkTextureComplete(LoadedSettings.Paths.OutputPath, ResumeCheckpoint, OriginalInputPath)
+                        End If
+                    End Sub
+                End If
+                StartBuilder(ChainPaths(0), ChainPaths(1), NewImages, Model, CompletedTextureCallback)
                 If WorkHorse.CancellationPending Then
                     CleanupUpscaleTemporaryFolders()
                     Return
@@ -2694,46 +2716,58 @@ Public Class Form1
 
                 DeletedChainPaths.Add(ChainPaths(0))
                 ChainPaths.RemoveAt(0)
-                If (ChainList.IndexOf(Model) = ChainList.Count - 1 AndAlso Model.Name <> "TexConv") OrElse
-                    (ChainList(ChainList.Count - 1).Name = "TexConv" AndAlso ChainList.IndexOf(Model) = ChainList.Count - 2) Then
-                    If LoadedSettings.BasicSettings.Defringe Then
-                        For Each NewImage As String In NewImages
-                            If WorkHorse.CancellationPending Then
-                                CleanupUpscaleTemporaryFolders()
-                                Return
-                            End If
-                            Dim OutputImage As String = Path.Combine(ChainPaths(0), Path.GetFileName(NewImage))
-                            If File.Exists(OutputImage) Then Defringe(OutputImage, LoadedSettings.BasicSettings.DefringeThreshold)
-                        Next
-                    End If
-                    If LoadedSettings.ExpertSettings.SeamlessMode > 0 Then
-                        For Each NewImage As String In NewImages
-                            If WorkHorse.CancellationPending Then
-                                CleanupUpscaleTemporaryFolders()
-                                Return
-                            End If
-                            Dim OutputImage As String = Path.Combine(ChainPaths(0), Path.GetFileName(NewImage))
-                            If File.Exists(OutputImage) Then
-                                Dim ScaleVal As Integer = LoadedSettings.ExpertSettings.SeamlessScale * LoadedSettings.ExpertSettings.SeamlessMargin
-                                Using CroppedSource As Bitmap = GetUnlockedImage(OutputImage)
-                                    Using CroppedImage As Bitmap = CropImage(CroppedSource, ScaleVal, ScaleVal,
-                                        CroppedSource.Width - (ScaleVal * 2), CroppedSource.Height - (ScaleVal * 2), 0)
-                                        If Not WorkHorse.CancellationPending Then CroppedImage.Save(OutputImage)
-                                    End Using
+                If IsFinalStage Then
+                    FinalOutputsForBatch = GetNonEmptyOutputsByStem(ChainPaths(0), FinalOutputExtensions)
+                End If
+                Dim RunsFinalPostProcessing As Boolean =
+                    (ChainList.IndexOf(Model) = ChainList.Count - 1 AndAlso Model.Name <> "TexConv") OrElse
+                    (ChainList(ChainList.Count - 1).Name = "TexConv" AndAlso ChainList.IndexOf(Model) = ChainList.Count - 2)
+                If RunsFinalPostProcessing Then
+                    For Each NewImage As String In NewImages
+                        If WorkHorse.CancellationPending Then
+                            CleanupUpscaleTemporaryFolders()
+                            Return
+                        End If
+                        Dim OutputImage As String = Path.Combine(ChainPaths(0), Path.GetFileName(NewImage))
+                        If LoadedSettings.BasicSettings.Defringe AndAlso File.Exists(OutputImage) Then
+                            Defringe(OutputImage, LoadedSettings.BasicSettings.DefringeThreshold)
+                        End If
+                        If WorkHorse.CancellationPending Then
+                            CleanupUpscaleTemporaryFolders()
+                            Return
+                        End If
+                        If LoadedSettings.ExpertSettings.SeamlessMode > 0 AndAlso File.Exists(OutputImage) Then
+                            Dim ScaleVal As Integer = LoadedSettings.ExpertSettings.SeamlessScale * LoadedSettings.ExpertSettings.SeamlessMargin
+                            Using CroppedSource As Bitmap = GetUnlockedImage(OutputImage)
+                                Using CroppedImage As Bitmap = CropImage(CroppedSource, ScaleVal, ScaleVal,
+                                    CroppedSource.Width - (ScaleVal * 2), CroppedSource.Height - (ScaleVal * 2), 0)
+                                    If Not WorkHorse.CancellationPending Then CroppedImage.Save(OutputImage)
                                 End Using
-                            End If
-                        Next
-                    End If
-                    If LoadedSettings.BasicSettings.FixPS2 Then
-                        For Each NewImage As String In NewImages
-                            If WorkHorse.CancellationPending Then
-                                CleanupUpscaleTemporaryFolders()
-                                Return
-                            End If
-                            Dim OutputImage As String = Path.Combine(ChainPaths(0), Path.GetFileName(NewImage))
-                            If File.Exists(OutputImage) Then AddPS2Alpha(OutputImage)
-                        Next
-                    End If
+                            End Using
+                        End If
+                        If WorkHorse.CancellationPending Then
+                            CleanupUpscaleTemporaryFolders()
+                            Return
+                        End If
+                        If LoadedSettings.BasicSettings.FixPS2 AndAlso File.Exists(OutputImage) Then AddPS2Alpha(OutputImage)
+                        If WorkHorse.CancellationPending Then
+                            CleanupUpscaleTemporaryFolders()
+                            Return
+                        End If
+                        If IsFinalStage Then
+                            MarkCheckpointedFinalTexture(LoadedSettings.Paths.OutputPath, ResumeCheckpoint,
+                                OriginalInputByStem, StageCounts, FinalOutputsForBatch,
+                                Path.GetFileNameWithoutExtension(NewImage), ChainList.Count)
+                        End If
+                    Next
+                End If
+                If IsFinalStage AndAlso Not WorkHorse.CancellationPending Then
+                    For Each CopiedInput As String In CopiedInputs
+                        If WorkHorse.CancellationPending Then Exit For
+                        MarkCheckpointedFinalTexture(LoadedSettings.Paths.OutputPath, ResumeCheckpoint,
+                            OriginalInputByStem, StageCounts, FinalOutputsForBatch,
+                            Path.GetFileNameWithoutExtension(CopiedInput), ChainList.Count)
+                    Next
                 End If
                 If WorkHorse.CancellationPending Then
                     CleanupUpscaleTemporaryFolders()
@@ -2744,16 +2778,12 @@ Public Class Form1
             For Each ChainDir As String In DeletedChainPaths
                 If Directory.Exists(ChainDir) Then Directory.Delete(ChainDir, True)
             Next
-            Dim FinalOutputExtensions As HashSet(Of String) = GetExpectedOutputExtensions(
-                CopiedInputs, ChainList(ChainList.Count - 1).Package)
-            Dim FinalOutputs As Dictionary(Of String, String) = GetNonEmptyOutputsByStem(
-                LoadedSettings.Paths.OutputPath, FinalOutputExtensions)
             Dim CompletedBatchInputs As New List(Of String)
             For Each CopiedInput As String In CopiedInputs
                 Dim Stem As String = Path.GetFileNameWithoutExtension(CopiedInput)
                 Dim CompletedStages As Integer = 0
                 If ChainList.Count > 0 AndAlso StageCounts.TryGetValue(Stem, CompletedStages) AndAlso
-                    CompletedStages = ChainList.Count AndAlso FinalOutputs.ContainsKey(Stem) Then
+                    CompletedStages = ChainList.Count AndAlso FinalOutputsForBatch.ContainsKey(Stem) Then
                     Dim FullInputPath As String = Path.GetFullPath(CopiedInput)
                     SuccessfullyProcessedInputs.Add(FullInputPath)
                     CompletedBatchInputs.Add(FullInputPath)
@@ -2830,7 +2860,9 @@ Public Class Form1
         Loop
     End Sub
 
-    Private Sub StartBuilder(SourcePath As String, DestPath As String, ImageList As List(Of String), Model As FormSettings.ChainObject)
+    Private Sub StartBuilder(SourcePath As String, DestPath As String, ImageList As List(Of String),
+                             Model As FormSettings.ChainObject,
+                             Optional TextureCompletedCallback As Action(Of String) = Nothing)
         If ImageList.Count = 0 OrElse WorkHorse.CancellationPending Then Return
 
         Dim BuildProcess As ProcessStartInfo
@@ -2841,6 +2873,21 @@ Public Class Form1
         Dim BackendDisplay As String = If(IsSpandrelBackend, "Spandrel", Model.PackageType)
         Dim ExpectedOutputExtensions As HashSet(Of String) = GetExpectedOutputExtensions(ImageList, Model.Package)
         Dim ProtectedOutputPaths As HashSet(Of String) = GetExistingOutputPaths(DestPath, ImageList, ExpectedOutputExtensions)
+        Dim BackendTextureCompletedHandler As Action(Of String) = Nothing
+        If IsSpandrelBackend AndAlso TextureCompletedCallback IsNot Nothing Then
+            BackendTextureCompletedHandler = Sub(ReportedImagePath As String)
+                Dim NormalizedReportedPath As String = ReportedImagePath.Replace("/"c, Path.DirectorySeparatorChar)
+                Dim ReportedImageName As String = Path.GetFileName(NormalizedReportedPath)
+                Dim MatchingInput As String = ImageList.FirstOrDefault(Function(Candidate As String) _
+                    String.Equals(Path.GetFileName(Candidate), ReportedImageName, StringComparison.OrdinalIgnoreCase))
+                If String.IsNullOrWhiteSpace(MatchingInput) Then Return
+                Dim CompletedOutputPath As String = Path.Combine(DestPath, Path.GetFileName(MatchingInput))
+                If Not ExpectedOutputExtensions.Contains(Path.GetExtension(CompletedOutputPath)) OrElse
+                    Not IsNonEmptyFile(CompletedOutputPath) Then Return
+                TextureCompletedCallback(Path.GetFileName(MatchingInput))
+                ProtectedOutputPaths.Add(Path.GetFullPath(CompletedOutputPath))
+            End Sub
+        End If
         If Model.PackageType = "ESRGAN" OrElse IsSpandrelBackend OrElse Model.PackageType.Contains("Vulkan") Then
             If IsSpandrelBackend Then
                 Dim PythonExecutable As String = FindPythonExecutable()
@@ -2859,7 +2906,8 @@ Public Class Form1
             End If
             ConfigureCapturedProcess(BuildProcess)
             Dim Capture As ProcessOutputCapture = StartCapturedProcess(BuildProcess, BackendDisplay, LoadedSettings.Paths.OutputPath,
-                                                                       If(IsSpandrelBackend, Nothing, ImageList(0)), IsSpandrelBackend)
+                                                                       If(IsSpandrelBackend, Nothing, ImageList(0)),
+                                                                       IsSpandrelBackend, BackendTextureCompletedHandler)
             Try
                 CompleteCapturedProcess(Capture)
                 If WorkHorse.CancellationPending Then
@@ -2958,7 +3006,8 @@ Public Class Form1
     End Sub
 
     Private Function StartCapturedProcess(StartInfo As ProcessStartInfo, BackendName As String, SaveLocation As String,
-                                          InputPath As String, ParseProgress As Boolean) As ProcessOutputCapture
+                                          InputPath As String, ParseProgress As Boolean,
+                                          Optional TextureCompletedCallback As Action(Of String) = Nothing) As ProcessOutputCapture
         Dim ActiveProcess As Process = Process.Start(StartInfo)
         If ActiveProcess Is Nothing Then Throw New InvalidOperationException("Failed to start " & BackendName & ".")
         Dim OutputTask As Task(Of String) = Nothing
@@ -2966,7 +3015,7 @@ Public Class Form1
         Try
             RegisterActiveProcess(ActiveProcess)
             If ParseProgress Then
-                OutputTask = Task.Run(Function() ReadSpandrelOutput(ActiveProcess))
+                OutputTask = Task.Run(Function() ReadSpandrelOutput(ActiveProcess, TextureCompletedCallback))
             Else
                 OutputTask = ActiveProcess.StandardOutput.ReadToEndAsync()
             End If
@@ -3116,13 +3165,24 @@ Public Class Form1
         End Try
     End Sub
 
-    Private Function ReadSpandrelOutput(SpandrelProcess As Process) As String
+    Private Function ReadSpandrelOutput(SpandrelProcess As Process,
+                                        Optional TextureCompletedCallback As Action(Of String) = Nothing) As String
+        Const CompletedPrefix As String = "AUTOCRISPY_TEXTURE_COMPLETED:"
         Dim CapturedOutput As New System.Text.StringBuilder()
         Dim LastProgressUpdate As DateTime = DateTime.MinValue
         While True
             Dim OutputLine As String = SpandrelProcess.StandardOutput.ReadLine()
             If OutputLine Is Nothing Then Exit While
             CapturedOutput.AppendLine(OutputLine)
+            If OutputLine.StartsWith(CompletedPrefix, StringComparison.Ordinal) AndAlso TextureCompletedCallback IsNot Nothing Then
+                Try
+                    Dim EncodedImageName As String = OutputLine.Substring(CompletedPrefix.Length).Trim()
+                    Dim CompletedImageName As String = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(EncodedImageName))
+                    TextureCompletedCallback(CompletedImageName)
+                Catch ex As Exception
+                    System.Diagnostics.Debug.WriteLine("Could not persist a completed Spandrel texture: " & ex.GetBaseException().Message)
+                End Try
+            End If
             If OutputLine.StartsWith("AUTOCRISPY_PROGRESS:", StringComparison.Ordinal) AndAlso
                 (DateTime.UtcNow - LastProgressUpdate).TotalMilliseconds >= 500 Then
                 WorkHorse.ReportProgress(0, OutputLine.Substring("AUTOCRISPY_PROGRESS:".Length).Trim())
@@ -3886,6 +3946,25 @@ Public Class Form1
         End Using
     End Function
 
+    Private Function GetResumeCompletedLogPath(OutputFolder As String) As String
+        Return GetResumeCheckpointPath(OutputFolder) & ".completed"
+    End Function
+
+    Private Function GetResumeEntryKey(AttemptId As String, InputPath As String) As String
+        Return If(AttemptId, String.Empty) & "|" & Path.GetFullPath(InputPath)
+    End Function
+
+    Private Sub ClearResumeCompletedLog(OutputFolder As String)
+        Dim CompletedLogPath As String = GetResumeCompletedLogPath(OutputFolder)
+        If Not File.Exists(CompletedLogPath) Then Return
+        Try
+            File.Delete(CompletedLogPath)
+        Catch ex As Exception
+            ' Attempt IDs prevent old records from applying to later processing attempts.
+            System.Diagnostics.Debug.WriteLine("Could not compact completed-texture resume log: " & ex.Message)
+        End Try
+    End Sub
+
     Private Function LoadResumeCheckpoint(OutputFolder As String) As BatchResumeCheckpoint
         Dim CheckpointPath As String = GetResumeCheckpointPath(OutputFolder)
         SyncLock ResumeCheckpointLock
@@ -3896,16 +3975,19 @@ Public Class Form1
                     Dim Serializer As New Xml.Serialization.XmlSerializer(GetType(BatchResumeCheckpoint))
                     Checkpoint = DirectCast(Serializer.Deserialize(CheckpointStream), BatchResumeCheckpoint)
                 End Using
-                If Checkpoint Is Nothing OrElse Checkpoint.Version <> 1 Then
+                If Checkpoint Is Nothing OrElse Checkpoint.Version < 1 OrElse Checkpoint.Version > 2 Then
                     Throw New InvalidDataException("The resume checkpoint version is not supported.")
                 End If
                 If Checkpoint.InProgress Is Nothing Then Checkpoint.InProgress = New List(Of BatchResumeEntry)
                 For Each Entry As BatchResumeEntry In Checkpoint.InProgress
+                    Dim ParsedAttemptId As Guid
                     If Entry Is Nothing OrElse String.IsNullOrWhiteSpace(Entry.InputPath) OrElse
-                        Entry.OutputExtensions Is Nothing OrElse Entry.OutputExtensions.Count = 0 Then
+                        Entry.OutputExtensions Is Nothing OrElse Entry.OutputExtensions.Count = 0 OrElse
+                        (Not String.IsNullOrWhiteSpace(Entry.AttemptId) AndAlso Not Guid.TryParse(Entry.AttemptId, ParsedAttemptId)) Then
                         Throw New InvalidDataException("The resume checkpoint contains an incomplete entry.")
                     End If
                 Next
+                Checkpoint.Version = 2
                 Return Checkpoint
             Catch ex As Exception
                 Throw New InvalidDataException("AutoCrispy could not read the saved resume checkpoint at " & CheckpointPath &
@@ -3920,10 +4002,11 @@ Public Class Form1
             If Checkpoint.InProgress Is Nothing Then Checkpoint.InProgress = New List(Of BatchResumeEntry)
             If Checkpoint.InProgress.Count = 0 Then
                 If File.Exists(CheckpointPath) Then File.Delete(CheckpointPath)
+                ClearResumeCompletedLog(OutputFolder)
                 Return
             End If
 
-            Checkpoint.Version = 1
+            Checkpoint.Version = 2
             Dim CheckpointDirectory As String = Path.GetDirectoryName(CheckpointPath)
             Directory.CreateDirectory(CheckpointDirectory)
             Dim TemporaryPath As String = CheckpointPath & "." & Guid.NewGuid().ToString("N") & ".tmp"
@@ -3947,13 +4030,40 @@ Public Class Form1
                     End Try
                 End If
             End Try
+            ClearResumeCompletedLog(OutputFolder)
         End SyncLock
     End Sub
 
+    Private Function LoadResumeCompletedEntryKeys(OutputFolder As String) As HashSet(Of String)
+        Dim Result As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+        Dim CompletedLogPath As String = GetResumeCompletedLogPath(OutputFolder)
+        SyncLock ResumeCheckpointLock
+            If Not File.Exists(CompletedLogPath) Then Return Result
+            For Each LogLine As String In File.ReadAllLines(CompletedLogPath)
+                If String.IsNullOrWhiteSpace(LogLine) Then Continue For
+                Try
+                    Dim DecodedRecord As String = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(LogLine.Trim()))
+                    Dim SeparatorIndex As Integer = DecodedRecord.IndexOf("|", StringComparison.Ordinal)
+                    If SeparatorIndex <= 0 OrElse SeparatorIndex = DecodedRecord.Length - 1 Then Continue For
+                    Dim AttemptId As String = DecodedRecord.Substring(0, SeparatorIndex)
+                    Dim InputPath As String = DecodedRecord.Substring(SeparatorIndex + 1)
+                    Dim ParsedAttemptId As Guid
+                    If Not Guid.TryParse(AttemptId, ParsedAttemptId) Then Continue For
+                    Result.Add(GetResumeEntryKey(AttemptId, InputPath))
+                Catch ex As Exception
+                    ' An incomplete final log line is ignored; that entry remains eligible for safe retry.
+                End Try
+            Next
+        End SyncLock
+        Return Result
+    End Function
+
     Private Function GetResumeInProgressPaths(OutputFolder As String) As HashSet(Of String)
         Dim Result As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+        Dim CompletedEntryKeys As HashSet(Of String) = LoadResumeCompletedEntryKeys(OutputFolder)
         For Each Entry As BatchResumeEntry In LoadResumeCheckpoint(OutputFolder).InProgress
-            Result.Add(Path.GetFullPath(Entry.InputPath))
+            Dim FullInputPath As String = Path.GetFullPath(Entry.InputPath)
+            If Not CompletedEntryKeys.Contains(GetResumeEntryKey(Entry.AttemptId, FullInputPath)) Then Result.Add(FullInputPath)
         Next
         Return Result
     End Function
@@ -3964,6 +4074,7 @@ Public Class Form1
         If OutputExtensions Is Nothing OrElse OutputExtensions.Count = 0 Then
             Throw New InvalidOperationException("Cannot save a safe resume checkpoint because the output image format could not be determined.")
         End If
+        Dim BatchAttemptId As String = Guid.NewGuid().ToString("N")
         For Each InputPath As String In Inputs
             If Not File.Exists(InputPath) Then Throw New FileNotFoundException("A batch input disappeared before it could be checkpointed.", InputPath)
             Dim FullInputPath As String = Path.GetFullPath(InputPath)
@@ -3971,6 +4082,7 @@ Public Class Form1
                 String.Equals(Path.GetFullPath(Existing.InputPath), FullInputPath, StringComparison.OrdinalIgnoreCase))
             Dim Entry As New BatchResumeEntry With {
                 .InputPath = FullInputPath,
+                .AttemptId = BatchAttemptId,
                 .OutputExtensions = New List(Of String)(OutputExtensions)
             }
             Checkpoint.InProgress.Add(Entry)
@@ -3978,21 +4090,83 @@ Public Class Form1
         SaveResumeCheckpoint(OutputFolder, Checkpoint)
     End Sub
 
+    Private Sub MarkTextureComplete(OutputFolder As String, Checkpoint As BatchResumeCheckpoint, InputPath As String)
+        If Checkpoint Is Nothing OrElse Checkpoint.InProgress Is Nothing OrElse String.IsNullOrWhiteSpace(InputPath) Then Return
+        Dim FullInputPath As String = Path.GetFullPath(InputPath)
+        SyncLock ResumeCheckpointLock
+            Dim Entry As BatchResumeEntry = Checkpoint.InProgress.FirstOrDefault(
+                Function(Candidate As BatchResumeEntry) String.Equals(
+                    Path.GetFullPath(Candidate.InputPath), FullInputPath, StringComparison.OrdinalIgnoreCase))
+            If Entry Is Nothing OrElse String.IsNullOrWhiteSpace(Entry.AttemptId) Then Return
+
+            Dim CompletedLogPath As String = GetResumeCompletedLogPath(OutputFolder)
+            Directory.CreateDirectory(Path.GetDirectoryName(CompletedLogPath))
+            Dim CompletedRecord As String = GetResumeEntryKey(Entry.AttemptId, FullInputPath)
+            Dim RecordBytes As Byte() = System.Text.Encoding.UTF8.GetBytes(
+                Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(CompletedRecord)) & Environment.NewLine)
+            Using CompletedLogStream As New FileStream(CompletedLogPath, FileMode.Append, FileAccess.Write, FileShare.Read)
+                CompletedLogStream.Write(RecordBytes, 0, RecordBytes.Length)
+                CompletedLogStream.Flush()
+            End Using
+            Checkpoint.InProgress.RemoveAll(Function(Candidate As BatchResumeEntry) _
+                String.Equals(Path.GetFullPath(Candidate.InputPath), FullInputPath, StringComparison.OrdinalIgnoreCase))
+            Dim ShouldCompactLog As Boolean = False
+            Try
+                ShouldCompactLog = New FileInfo(CompletedLogPath).Length >= 65536
+            Catch ex As Exception
+                System.Diagnostics.Debug.WriteLine("Could not inspect completed-texture resume log: " & ex.Message)
+            End Try
+            If ShouldCompactLog Then SaveResumeCheckpoint(OutputFolder, Checkpoint)
+        End SyncLock
+    End Sub
+
     Private Sub MarkBatchComplete(OutputFolder As String, Checkpoint As BatchResumeCheckpoint, Inputs As IEnumerable(Of String))
         If Inputs Is Nothing Then Return
-        For Each InputPath As String In Inputs
-            Dim FullInputPath As String = Path.GetFullPath(InputPath)
-            Checkpoint.InProgress.RemoveAll(Function(Existing As BatchResumeEntry) _
-                String.Equals(Path.GetFullPath(Existing.InputPath), FullInputPath, StringComparison.OrdinalIgnoreCase))
-        Next
-        SaveResumeCheckpoint(OutputFolder, Checkpoint)
+        SyncLock ResumeCheckpointLock
+            For Each InputPath As String In Inputs
+                Dim FullInputPath As String = Path.GetFullPath(InputPath)
+                Checkpoint.InProgress.RemoveAll(Function(Existing As BatchResumeEntry) _
+                    String.Equals(Path.GetFullPath(Existing.InputPath), FullInputPath, StringComparison.OrdinalIgnoreCase))
+            Next
+            SaveResumeCheckpoint(OutputFolder, Checkpoint)
+        End SyncLock
     End Sub
+
+    Private Sub MarkCheckpointedFinalTexture(OutputFolder As String, Checkpoint As BatchResumeCheckpoint,
+                                             OriginalInputByStem As Dictionary(Of String, String),
+                                             StageCounts As Dictionary(Of String, Integer),
+                                             FinalOutputs As Dictionary(Of String, String),
+                                             Stem As String, RequiredStageCount As Integer)
+        Dim CompletedStages As Integer = 0
+        Dim OriginalInputPath As String = Nothing
+        Dim FinalOutputPath As String = Nothing
+        If Not StageCounts.TryGetValue(Stem, CompletedStages) OrElse CompletedStages <> RequiredStageCount OrElse
+            Not OriginalInputByStem.TryGetValue(Stem, OriginalInputPath) OrElse
+            Not FinalOutputs.TryGetValue(Stem, FinalOutputPath) OrElse Not IsNonEmptyFile(FinalOutputPath) Then Return
+        MarkTextureComplete(OutputFolder, Checkpoint, OriginalInputPath)
+    End Sub
+
+    Private Function IsNonEmptyFile(FilePath As String) As Boolean
+        If String.IsNullOrWhiteSpace(FilePath) OrElse Not File.Exists(FilePath) Then Return False
+        Try
+            Return New FileInfo(FilePath).Length > 0
+        Catch ex As IOException
+            Return False
+        Catch ex As UnauthorizedAccessException
+            Return False
+        End Try
+    End Function
 
     Private Function RecoverInterruptedBatch(OutputFolder As String, Checkpoint As BatchResumeCheckpoint) As Integer
         If Checkpoint Is Nothing OrElse Checkpoint.InProgress Is Nothing OrElse Checkpoint.InProgress.Count = 0 Then Return 0
 
+        Dim CompletedEntryKeys As HashSet(Of String) = LoadResumeCompletedEntryKeys(OutputFolder)
+        Dim EntriesToRetry As New List(Of BatchResumeEntry)
         Dim AllowedExtensionsByStem As New Dictionary(Of String, HashSet(Of String))(StringComparer.OrdinalIgnoreCase)
         For Each Entry As BatchResumeEntry In Checkpoint.InProgress
+            Dim FullInputPath As String = Path.GetFullPath(Entry.InputPath)
+            If CompletedEntryKeys.Contains(GetResumeEntryKey(Entry.AttemptId, FullInputPath)) Then Continue For
+            EntriesToRetry.Add(Entry)
             Dim Stem As String = Path.GetFileNameWithoutExtension(Entry.InputPath)
             Dim EntryExtensions As HashSet(Of String) = Nothing
             If Not AllowedExtensionsByStem.TryGetValue(Stem, EntryExtensions) Then
@@ -4003,6 +4177,12 @@ Public Class Form1
                 If Not String.IsNullOrWhiteSpace(Extension) Then EntryExtensions.Add(Extension)
             Next
         Next
+
+        If EntriesToRetry.Count = 0 Then
+            Checkpoint.InProgress.Clear()
+            SaveResumeCheckpoint(OutputFolder, Checkpoint)
+            Return 0
+        End If
         If AllowedExtensionsByStem.Count = 0 OrElse
             Not AllowedExtensionsByStem.Values.Any(Function(Extensions As HashSet(Of String)) Extensions.Count > 0) Then
             Throw New InvalidDataException("The saved resume checkpoint has no safe output paths to recover.")
@@ -4021,7 +4201,7 @@ Public Class Form1
             Next
         End If
 
-        Dim RecoveredCount As Integer = Checkpoint.InProgress.Count
+        Dim RecoveredCount As Integer = EntriesToRetry.Count
         Checkpoint.InProgress.Clear()
         SaveResumeCheckpoint(OutputFolder, Checkpoint)
         Return RecoveredCount
