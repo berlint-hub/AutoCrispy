@@ -38,6 +38,7 @@ Public Class Form1
     Private LastChainPreviewTooltip As String = String.Empty
     Private ReadOnly UiToolTip As New ToolTip()
     Private ReadOnly SpandrelTilingBadge As New System.Windows.Forms.Label()
+    Private ReadOnly BrowseOpenModelDbButton As New Button()
     Private ReadOnly GamePathProfiles As New BindingList(Of FormSettings.GamePathProfile)
     Private CurrentRunGamePaths As List(Of FormSettings.GamePathProfile)
     Private CurrentRunTempRoot As String = String.Empty
@@ -254,10 +255,11 @@ Public Class Form1
         End If
         StartUpCheckEXE()
         If ExeComboBox.Items.Count > 0 Then
-            Dim PreferredBackendIndex As Integer = GetPreferredSpandrelBackendIndex()
+            Dim PreferredBackendIndex As Integer = -1
+            If SupportedSpandrelModels.Count > 0 Then PreferredBackendIndex = GetPreferredSpandrelBackendIndex()
             If PreferredBackendIndex < 0 Then PreferredBackendIndex = 0
             ExeComboBox.SelectedIndex = PreferredBackendIndex
-            If GetPreferredSpandrelBackendIndex() >= 0 Then ReplaceLegacyUpscalerChain()
+            If SupportedSpandrelModels.Count > 0 Then ReplaceLegacyUpscalerChain()
             SetSettingsWindow()
         End If
         Await RefreshSupportedSpandrelModels(Root)
@@ -323,6 +325,7 @@ Public Class Form1
         PyNormalMapModeLabel.Anchor = AnchorStyles.Top Or AnchorStyles.Left
         PyNormalMapModeComboBox.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
         RefreshSpandrelModelsButton.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        BrowseOpenModelDbButton.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         SpandrelModelInfoLabel.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
         SpandrelScanStatusLabel.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
         TileSizeHint.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
@@ -359,6 +362,7 @@ Public Class Form1
 
             Dim IsSpandrelSelected As Boolean = String.Equals(If(ExeComboBox.SelectedItem, "").ToString(), SpandrelBackendName, StringComparison.OrdinalIgnoreCase)
             LayoutSpandrelModelCard(IsSpandrelSelected)
+            LayoutOpenModelDbControls()
             LayoutSpandrelResponsiveControls()
         Finally
             IsApplyingResponsiveLayout = False
@@ -610,8 +614,7 @@ Public Class Form1
 
     Private Sub AddSpandrelBackends()
         If Not File.Exists(Path.Combine(Application.StartupPath, SpandrelRunnerName)) Then Return
-        If SupportedSpandrelModels.Count > 0 AndAlso FindPythonExecutable() <> "" AndAlso
-            Not ExeComboBox.Items.Contains(SpandrelBackendName) Then
+        If FindPythonExecutable() <> "" AndAlso Not ExeComboBox.Items.Contains(SpandrelBackendName) Then
             ExeComboBox.Items.Add(SpandrelBackendName)
         End If
     End Sub
@@ -659,6 +662,7 @@ Public Class Form1
         End If
         SupportedSpandrelModels.Clear()
         RefreshSpandrelModelsButton.Enabled = False
+        BrowseOpenModelDbButton.Enabled = False
         SetModelScanStatus("Checking for model folders and Python…")
 
         Dim ModelFolders As New List(Of String)
@@ -686,6 +690,7 @@ Public Class Form1
             If ScanGeneration = SpandrelScanGeneration AndAlso Not IsDisposed Then
                 WatchDogButton.Enabled = True
                 RefreshSpandrelModelsButton.Enabled = True
+                BrowseOpenModelDbButton.Enabled = True
                 If String.Equals(If(ExeComboBox.SelectedItem, "").ToString(), SpandrelBackendName, StringComparison.OrdinalIgnoreCase) Then
                     ConfigurePythonModelSelector(SpandrelBackendName)
                 End If
@@ -746,6 +751,7 @@ Public Class Form1
                 SpandrelScanCancellation = Nothing
                 If Not IsDisposed Then WatchDogButton.Enabled = True
                 If Not IsDisposed Then RefreshSpandrelModelsButton.Enabled = True
+                If Not IsDisposed Then BrowseOpenModelDbButton.Enabled = True
             End If
             ScanCancellation.Dispose()
             TryCompleteDeferredClose()
@@ -1084,10 +1090,11 @@ Public Class Form1
         End If
         StartUpCheckEXE()
         If ExeComboBox.Items.Count > 0 Then
-            Dim PreferredBackendIndex As Integer = GetPreferredSpandrelBackendIndex()
+            Dim PreferredBackendIndex As Integer = -1
+            If SupportedSpandrelModels.Count > 0 Then PreferredBackendIndex = GetPreferredSpandrelBackendIndex()
             If PreferredBackendIndex < 0 Then PreferredBackendIndex = 0
             ExeComboBox.SelectedIndex = PreferredBackendIndex
-            If GetPreferredSpandrelBackendIndex() >= 0 Then ReplaceLegacyUpscalerChain()
+            If SupportedSpandrelModels.Count > 0 Then ReplaceLegacyUpscalerChain()
             SetSettingsWindow()
         End If
         Await RefreshSupportedSpandrelModels(Root)
@@ -1521,6 +1528,16 @@ Public Class Form1
         PyGroup.Controls.Add(SpandrelTilingBadge)
         SpandrelTilingBadge.BringToFront()
 
+        BrowseOpenModelDbButton.Name = "BrowseOpenModelDbButton"
+        BrowseOpenModelDbButton.Text = "Catalog…"
+        BrowseOpenModelDbButton.AccessibleName = "Browse OpenModelDB compatible models"
+        BrowseOpenModelDbButton.Size = New Size(112, 30)
+        BrowseOpenModelDbButton.UseVisualStyleBackColor = True
+        BrowseOpenModelDbButton.Visible = False
+        PyGroup.Controls.Add(BrowseOpenModelDbButton)
+        BrowseOpenModelDbButton.BringToFront()
+        AddHandler BrowseOpenModelDbButton.Click, AddressOf BrowseOpenModelDbButton_Click
+
         SpandrelModelInfoLabel.BorderStyle = BorderStyle.FixedSingle
         SpandrelModelInfoLabel.BackColor = System.Drawing.Color.FromArgb(245, 247, 250)
         SpandrelModelInfoLabel.Padding = New Padding(6, 0, 6, 0)
@@ -1549,6 +1566,27 @@ Public Class Form1
             SpandrelTilingBadge.Size = New Size(BadgeWidth, Math.Max(20, SpandrelModelInfoLabel.Height - 10))
         Else
             SpandrelModelInfoLabel.Width = AvailableWidth
+        End If
+    End Sub
+
+    Private Sub LayoutOpenModelDbControls()
+        If PyGroup Is Nothing OrElse PyGroup.ClientSize.Width <= 0 Then Return
+        Dim ClientWidth As Integer = PyGroup.ClientSize.Width
+        Dim RightMargin As Integer = Math.Max(5, PyGroup.Padding.Right + 2)
+        Dim ButtonGap As Integer = 7
+        RefreshSpandrelModelsButton.Width = 94
+        RefreshSpandrelModelsButton.Left = ClientWidth - RightMargin - RefreshSpandrelModelsButton.Width
+        BrowseOpenModelDbButton.Width = 112
+        BrowseOpenModelDbButton.Height = 30
+        BrowseOpenModelDbButton.Left = RefreshSpandrelModelsButton.Left - ButtonGap - BrowseOpenModelDbButton.Width
+        BrowseOpenModelDbButton.Top = RefreshSpandrelModelsButton.Top
+
+        Dim IsSpandrelSelected As Boolean = String.Equals(
+            If(ExeComboBox.SelectedItem, "").ToString(), SpandrelBackendName, StringComparison.OrdinalIgnoreCase)
+        If IsSpandrelSelected Then
+            PyModel.Width = Math.Max(160, BrowseOpenModelDbButton.Left - PyModel.Left - ButtonGap)
+        Else
+            PyModel.Width = Math.Max(160, ClientWidth - PyModel.Left - RightMargin)
         End If
     End Sub
 
@@ -1765,6 +1803,8 @@ Public Class Form1
         LayoutSpandrelResponsiveControls()
         SpandrelScanStatusLabel.Visible = IsSpandrelSelected
         RefreshSpandrelModelsButton.Visible = IsSpandrelSelected
+        BrowseOpenModelDbButton.Visible = IsSpandrelSelected
+        LayoutOpenModelDbControls()
         PyTileSize.Enabled = True
         Label25.Enabled = True
         TileSizeHint.ForeColor = System.Drawing.SystemColors.GrayText
@@ -2154,6 +2194,114 @@ Public Class Form1
     Private Async Sub RefreshSpandrelModelsButton_Click(sender As Object, e As EventArgs) Handles RefreshSpandrelModelsButton.Click
         Await RefreshSupportedSpandrelModels(Root)
     End Sub
+
+    Private Async Sub BrowseOpenModelDbButton_Click(sender As Object, e As EventArgs)
+        If WorkHorse.IsBusy Then
+            MessageBox.Show(Me, "Stop the active batch before downloading or scanning a model.",
+                "Model catalog", MessageBoxButtons.OK, MessageBoxIcon.Information)
+            Return
+        End If
+        Dim PythonExecutable As String = FindPythonExecutable()
+        Dim RunnerPath As String = Path.Combine(Application.StartupPath, SpandrelRunnerName)
+        Dim CatalogHelperPath As String = Path.Combine(Application.StartupPath, "openmodeldb_catalog.py")
+        If PythonExecutable = "" OrElse Not File.Exists(RunnerPath) OrElse Not File.Exists(CatalogHelperPath) Then
+            MessageBox.Show(Me,
+                "OpenModelDB downloads need the configured Python 3.10+ environment and both AutoCrispy Python helpers beside the application.",
+                "Python setup required", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+            Return
+        End If
+
+        Dim DestinationFolder As String = Path.Combine(Root, GenericModelFolderName)
+        Dim ExistingModelPaths As IEnumerable(Of String) = SupportedSpandrelModels.
+            Where(Function(Model As SpandrelModelInfo) Not Model.IsAutoTextureRouter).
+            Select(Function(Model As SpandrelModelInfo) Model.FilePath).ToList()
+        Using CatalogDialog As New OpenModelDbDialog(PythonExecutable, CatalogHelperPath, DestinationFolder,
+                                                      ExistingModelPaths, AddressOf InstallOpenModelDbModelAsync)
+            If CatalogDialog.ShowDialog(Me) <> DialogResult.OK OrElse
+                String.IsNullOrWhiteSpace(CatalogDialog.DownloadedModelPath) Then Return
+            LastSelectedSpandrelModelPath = CatalogDialog.DownloadedModelPath
+            Await RefreshSupportedSpandrelModels(Root)
+            LastSelectedSpandrelModelPath = CatalogDialog.DownloadedModelPath
+            ConfigurePythonModelSelector(SpandrelBackendName)
+            Dim InstalledIndex As Integer = SupportedSpandrelModels.FindIndex(Function(Model As SpandrelModelInfo) _
+                String.Equals(Model.FilePath, CatalogDialog.DownloadedModelPath, StringComparison.OrdinalIgnoreCase))
+            If InstalledIndex >= 0 Then PyModel.SelectedIndex = InstalledIndex
+            SetSettingsWindow()
+        End Using
+    End Sub
+
+    Private Async Function InstallOpenModelDbModelAsync(Item As OpenModelDbCatalogItem,
+                                                        Resource As OpenModelDbResource,
+                                                        DownloadedPath As String,
+                                                        ReportStatus As Action(Of String),
+                                                        CancelToken As CancellationToken) As Task(Of String)
+        CancelToken.ThrowIfCancellationRequested()
+        If Item Is Nothing OrElse Resource Is Nothing OrElse Not File.Exists(DownloadedPath) Then
+            Throw New InvalidDataException("The verified OpenModelDB download was not found.")
+        End If
+        If Item.Scale <> 1 AndAlso Item.Scale <> 4 Then
+            Throw New InvalidDataException("AutoCrispy only supports 1× restoration and 4× super-resolution checkpoints.")
+        End If
+        If Not String.Equals(Path.GetFileName(Item.Id), Item.Id, StringComparison.Ordinal) OrElse
+            Item.Id.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 Then
+            Throw New InvalidDataException("The OpenModelDB model ID is not a safe filename.")
+        End If
+
+        Dim PythonExecutable As String = FindPythonExecutable()
+        Dim RunnerPath As String = Path.Combine(Application.StartupPath, SpandrelRunnerName)
+        If PythonExecutable = "" OrElse Not File.Exists(RunnerPath) Then
+            Throw New InvalidOperationException("AutoCrispy's Spandrel Python environment is not available for model validation.")
+        End If
+        If ReportStatus IsNot Nothing Then ReportStatus("Testing the download with AutoCrispy's installed Spandrel…")
+        Dim DebugEnabled As Boolean = DebugCheckbox.Checked
+        Dim StagingFolder As String = Path.GetDirectoryName(Path.GetFullPath(DownloadedPath))
+        Dim DetectedModels As List(Of SpandrelModelInfo) = Await Task.Run(
+            Function() ScanSpandrelModelFolder(StagingFolder, PythonExecutable, RunnerPath, DebugEnabled, CancelToken),
+            CancelToken)
+        CancelToken.ThrowIfCancellationRequested()
+        Dim DownloadedFullPath As String = Path.GetFullPath(DownloadedPath)
+        Dim ValidatedModel As SpandrelModelInfo = DetectedModels.FirstOrDefault(Function(Model As SpandrelModelInfo)
+            Not Model.IsAutoTextureRouter AndAlso
+            String.Equals(Path.GetFullPath(Model.FilePath), DownloadedFullPath, StringComparison.OrdinalIgnoreCase) AndAlso
+            Model.Scale = Item.Scale AndAlso Model.InputChannels = 3 AndAlso Model.OutputChannels = 3)
+        If ValidatedModel Is Nothing Then
+            Throw New InvalidDataException(
+                "The checkpoint did not pass AutoCrispy's Spandrel check for " & Item.Scale.ToString() & "× RGB inference. It was not installed.")
+        End If
+
+        Dim DestinationFolder As String = Path.Combine(Root, GenericModelFolderName)
+        Directory.CreateDirectory(DestinationFolder)
+        Dim FinalPath As String = Path.Combine(DestinationFolder, Item.Id & "." & Resource.Format)
+        If File.Exists(FinalPath) Then Throw New IOException("A file with this model ID already exists. Refresh the local model list or remove that file first.")
+        Dim PartialPath As String = Path.Combine(DestinationFolder, ".openmodeldb-" & Guid.NewGuid().ToString("N") & ".part")
+        If ReportStatus IsNot Nothing Then ReportStatus("Checkpoint passed Spandrel validation. Installing into the shared models folder…")
+        Try
+            Await Task.Run(Sub()
+                Using SourceStream As New FileStream(DownloadedPath, FileMode.Open, FileAccess.Read, FileShare.Read)
+                    Using DestinationStream As New FileStream(PartialPath, FileMode.CreateNew, FileAccess.Write, FileShare.None)
+                        Dim Buffer(1024 * 1024 - 1) As Byte
+                        While True
+                            CancelToken.ThrowIfCancellationRequested()
+                            Dim BytesRead As Integer = SourceStream.Read(Buffer, 0, Buffer.Length)
+                            If BytesRead <= 0 Then Exit While
+                            DestinationStream.Write(Buffer, 0, BytesRead)
+                        End While
+                        DestinationStream.Flush(True)
+                    End Using
+                End Using
+                CancelToken.ThrowIfCancellationRequested()
+                File.Move(PartialPath, FinalPath)
+            End Sub, CancelToken)
+            Return FinalPath
+        Catch
+            Try
+                If File.Exists(PartialPath) Then File.Delete(PartialPath)
+            Catch ex As Exception
+                System.Diagnostics.Debug.WriteLine("Could not remove a partial OpenModelDB install: " & ex.Message)
+            End Try
+            Throw
+        End Try
+    End Function
 
     Public Function GetSelectedUpscaleModel() As String
         Dim BackendName As String = If(ExeComboBox.SelectedItem, "").ToString()
