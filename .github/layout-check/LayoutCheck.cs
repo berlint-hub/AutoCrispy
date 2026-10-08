@@ -83,6 +83,21 @@ internal static class LayoutCheck
     [STAThread]
     private static int Main(string[] args)
     {
+        try
+        {
+            return Run(args);
+        }
+        catch (Exception ex)
+        {
+            // Unhandled exceptions only reach the raw log; surface them as an annotation.
+            Console.WriteLine("::error title=Layout::layout checker crashed: " + Escape(ex.ToString().Split('\n')[0]) +
+                              " at " + Escape(ex.StackTrace == null ? "?" : ex.StackTrace.Split('\n')[0]));
+            return 1;
+        }
+    }
+
+    private static int Run(string[] args)
+    {
         if (args.Length < 1)
         {
             Console.WriteLine("usage: LayoutCheck <AutoCrispy.exe>");
