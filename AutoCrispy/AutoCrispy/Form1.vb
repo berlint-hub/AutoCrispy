@@ -1,4 +1,4 @@
-Imports System.IO
+﻿Imports System.IO
 Imports System.Reflection
 Imports System.ComponentModel
 Imports System.Threading
@@ -233,6 +233,7 @@ Public Class Form1
         Me.SetStyle(ControlStyles.OptimizedDoubleBuffer, True)
         InitializeSpandrelModelCard()
         InitializeSpandrelRuntimeSetupControl()
+        InitializeAdvancedSettingTooltips()
         InitializeChainFriendlyUI()
         Application.CurrentCulture = New Globalization.CultureInfo("EN-US")
         PreloadImageList()
@@ -1678,6 +1679,16 @@ Public Class Form1
         UiToolTip.SetToolTip(PyNormalMapModeComboBox,
             "Off leaves RGB unchanged. Normalize XYZ decodes and normalizes all three vector channels. " &
             "Rebuild Z ignores blue and reconstructs positive Z from red/green (for BC5/RG or RG0 maps).")
+    End Sub
+
+    Private Sub InitializeAdvancedSettingTooltips()
+        AlphaComboBox.AccessibleName = "Alpha handling"
+        UiToolTip.SetToolTip(AlphaComboBox,
+            "How transparent textures are handled: Off processes every texture; " &
+            "Skip Alpha leaves textures that have transparency untouched; " &
+            "Alpha Only processes only textures that have transparency.")
+        UiToolTip.SetToolTip(HotKeyCheckbox,
+            "Send the configured hotkey to the game window after each completed texture batch.")
     End Sub
 
     Private Sub InitializeSpandrelRuntimeSetupControl()

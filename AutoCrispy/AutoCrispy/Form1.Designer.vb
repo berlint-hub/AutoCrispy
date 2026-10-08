@@ -934,7 +934,7 @@ Partial Class Form1
         Me.AutoPainterShareSuffix.Name = "AutoPainterShareSuffix"
         Me.AutoPainterShareSuffix.Size = New System.Drawing.Size(98, 20)
         Me.AutoPainterShareSuffix.TabIndex = 12
-        Me.AutoPainterShareSuffix.Text = "strict cap (floored)"
+        Me.AutoPainterShareSuffix.Text = "strict cap"
         Me.AutoPainterShareSuffix.Visible = False
         '
         'AutoPainterThresholdLabel
@@ -1042,7 +1042,7 @@ Partial Class Form1
         Me.AutoPainterModelLabel.Name = "AutoPainterModelLabel"
         Me.AutoPainterModelLabel.Size = New System.Drawing.Size(178, 24)
         Me.AutoPainterModelLabel.TabIndex = 15
-        Me.AutoPainterModelLabel.Text = "Painter — repeating textures:"
+        Me.AutoPainterModelLabel.Text = "Painter — repeating:"
         Me.AutoPainterModelLabel.Visible = False
         '
         'AutoPainterModelComboBox
