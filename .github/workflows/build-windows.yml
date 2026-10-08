@@ -67,25 +67,3 @@ jobs:
           path: AutoCrispy/AutoCrispy/bin/Release/**
           if-no-files-found: error
           retention-days: 7
-  ui-scaling-probe:
-    runs-on: windows-2022
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v4
-
-      - name: Compile scaling probe
-        shell: pwsh
-        run: |
-          $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-          if (-not (Test-Path $csc)) { throw "csc not found" }
-          & $csc /nologo /target:exe /out:probe.exe /r:System.Windows.Forms.dll /r:System.Drawing.dll .github\diagnostics\ScalingProbe.cs
-          if (-not (Test-Path probe.exe)) { throw "probe did not compile" }
-
-      - name: Run scaling probe
-        shell: pwsh
-        run: |
-          $lines = & .\probe.exe
-          $lines | Where-Object { $_ -notmatch '^PROBE\|' } | Write-Host
-          $lines | Where-Object { $_ -match '^PROBE\|' } | Select-Object -First 20 | ForEach-Object {
-            Write-Host "::notice title=WinForms scaling probe::$($_.Substring(6))"
-          }
