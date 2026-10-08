@@ -34,6 +34,7 @@ Public Class Form1
     Private ResponsivePanelRightMargin As Integer
     Private ReadOnly ResponsivePanelMinimumHeights As New Dictionary(Of GroupBox, Integer)
     Private ReadOnly ResponsivePanelBottomMargins As New Dictionary(Of GroupBox, Integer)
+    Private ReadOnly SpandrelBaseTops As New Dictionary(Of Control, Integer)
     Private AutoRoutePreviewHasResult As Boolean = False
     Private LastChainPreviewTooltip As String = String.Empty
     Private ReadOnly UiToolTip As New ToolTip()
@@ -297,6 +298,7 @@ Public Class Form1
         ResponsivePanelRightMargin = ClientSize.Width - SettingsLoc.X - ResponsivePanelMinimumWidth
         ResponsivePanelMinimumHeights.Clear()
         ResponsivePanelBottomMargins.Clear()
+        SpandrelBaseTops.Clear()
         For Each Panel As GroupBox In New GroupBox() {CaffeGroup, VulkanGroup, WaifuCPPGroup, AnimeCPPGroup, DDxGroup, xBRZGroup, PyGroup}
             ResponsivePanelMinimumHeights(Panel) = Panel.Height
             ResponsivePanelBottomMargins(Panel) = ClientSize.Height - SettingsLoc.Y - Panel.Height
@@ -372,8 +374,9 @@ Public Class Form1
             Next
 
             Dim IsSpandrelSelected As Boolean = String.Equals(If(ExeComboBox.SelectedItem, "").ToString(), SpandrelBackendName, StringComparison.OrdinalIgnoreCase)
-            LayoutSpandrelModelCard(IsSpandrelSelected)
             LayoutOpenModelDbControls()
+            LayoutSpandrelVerticalStack()
+            LayoutSpandrelModelCard(IsSpandrelSelected)
             LayoutSpandrelResponsiveControls()
         Finally
             IsApplyingResponsiveLayout = False
@@ -1766,6 +1769,66 @@ Public Class Form1
         Else
             SpandrelModelInfoLabel.Width = AvailableWidth
         End If
+    End Sub
+
+    ' Stacks the Spandrel card rows one below another using their real (DPI-scaled) heights.
+    ' Rows never rely on fixed designer Y positions, so they cannot overlap vertically. Controls
+    ' below the card keep their designer spacing and are shifted by the same amount.
+    Private Sub LayoutSpandrelVerticalStack()
+        If PyGroup Is Nothing OrElse PyGroup.ClientSize.Width <= 0 Then Return
+        If SpandrelBaseTops.Count = 0 Then
+            For Each Item As Control In PyGroup.Controls
+                SpandrelBaseTops(Item) = Item.Top
+            Next
+        End If
+
+        Dim Gap As Integer = Math.Max(4, CInt(Math.Round(6 * Math.Max(1, PyGroup.DeviceDpi) / 96.0)))
+        Dim Rows As Control()() = {
+            New Control() {SpandrelModelInfoLabel},
+            New Control() {SpandrelScanStatusLabel},
+            New Control() {Label25, PyTileSize, PyCPU, PyPrecisionLabel, PyPrecisionComboBox},
+            New Control() {TileSizeHint},
+            New Control() {PyNormalMapModeLabel, PyNormalMapModeComboBox}
+        }
+
+        Dim InCard As New HashSet(Of Control)
+        Dim Cursor As Integer = PyModel.Bottom + Gap
+        Dim CardBottom As Integer = Cursor
+        For Each Row As Control() In Rows
+            Dim VisibleItems As New List(Of Control)
+            For Each Item As Control In Row
+                InCard.Add(Item)
+                If Item.Visible Then VisibleItems.Add(Item)
+            Next
+            If VisibleItems.Count = 0 Then Continue For
+
+            Dim RowTop As Integer = Integer.MaxValue
+            For Each Item As Control In VisibleItems
+                RowTop = Math.Min(RowTop, Item.Top)
+            Next
+            Dim Delta As Integer = Cursor - RowTop
+            Dim RowBottom As Integer = Cursor
+            For Each Item As Control In VisibleItems
+                Item.Top += Delta
+                RowBottom = Math.Max(RowBottom, Item.Bottom)
+            Next
+            CardBottom = RowBottom
+            Cursor = RowBottom + Gap
+        Next
+
+        ' Everything below the card moves by the same amount the card's last row moved.
+        Dim BaseNormalTop As Integer
+        If Not SpandrelBaseTops.TryGetValue(PyNormalMapModeComboBox, BaseNormalTop) Then Return
+        Dim BaseCardBottom As Integer = BaseNormalTop + PyNormalMapModeComboBox.Height
+        Dim LowerDelta As Integer = CardBottom - BaseCardBottom
+        For Each Item As Control In PyGroup.Controls
+            If InCard.Contains(Item) OrElse Item Is PyModel OrElse Item Is RefreshSpandrelModelsButton OrElse
+                Item Is BrowseOpenModelDbButton Then Continue For
+            Dim BaseTop As Integer
+            If SpandrelBaseTops.TryGetValue(Item, BaseTop) AndAlso BaseTop >= BaseNormalTop Then
+                Item.Top = BaseTop + LowerDelta
+            End If
+        Next
     End Sub
 
     Private Sub LayoutOpenModelDbControls()
