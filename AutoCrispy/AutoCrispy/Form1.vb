@@ -283,6 +283,16 @@ Public Class Form1
         End If
     End Sub
 
+    Private Const FormDesignClientWidth As Integer = 980
+    Private Const FormDesignClientHeight As Integer = 640
+    Private Const PyGroupDesignWidth As Integer = 594
+    Private Const PyGroupDesignHeight As Integer = 360
+
+    ' Designer sizes were drawn at 96 DPI; WinForms scales controls, so runtime minimums must too.
+    Private Function ScaleForDpi(DesignValue As Integer) As Integer
+        Return CInt(Math.Round(DesignValue * Math.Max(1, DeviceDpi) / 96.0))
+    End Function
+
     Private Sub ConfigureResponsiveLayout()
         Dim InitialClientSize As Size = ClientSize
         FormBorderStyle = System.Windows.Forms.FormBorderStyle.Sizable
@@ -293,17 +303,22 @@ Public Class Form1
         ResponsiveSettingsMinimumHeight = SettingsGroup.Height
         ResponsiveSettingsBottomMargin = ClientSize.Height - SettingsGroup.Bottom
         ResponsiveActionBottomMargin = ClientSize.Height - RunOnceButton.Bottom
-        ResponsivePanelMinimumWidth = PyGroup.Width
+        ResponsivePanelMinimumWidth = Math.Max(PyGroup.Width, ScaleForDpi(PyGroupDesignWidth))
         SettingsLoc = New Point(SettingsGroup.Right + 16, SettingsGroup.Top)
         ResponsivePanelRightMargin = ClientSize.Width - SettingsLoc.X - ResponsivePanelMinimumWidth
         ResponsivePanelMinimumHeights.Clear()
         ResponsivePanelBottomMargins.Clear()
         SpandrelBaseTops.Clear()
         For Each Panel As GroupBox In New GroupBox() {CaffeGroup, VulkanGroup, WaifuCPPGroup, AnimeCPPGroup, DDxGroup, xBRZGroup, PyGroup}
-            ResponsivePanelMinimumHeights(Panel) = Panel.Height
+            ResponsivePanelMinimumHeights(Panel) = Math.Max(Panel.Height,
+                If(Panel Is PyGroup, ScaleForDpi(PyGroupDesignHeight), 0))
             ResponsivePanelBottomMargins(Panel) = ClientSize.Height - SettingsLoc.Y - Panel.Height
         Next
-        MinimumSize = Size
+        ' The window may not shrink below the designer layout size at the current DPI, so
+        ' controls cannot be pushed into each other.
+        Dim ChromeSize As New Size(Width - ClientSize.Width, Height - ClientSize.Height)
+        MinimumSize = New Size(ScaleForDpi(FormDesignClientWidth) + ChromeSize.Width,
+                               ScaleForDpi(FormDesignClientHeight) + ChromeSize.Height)
 
         TabGroup.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
         SettingsGroup.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left
