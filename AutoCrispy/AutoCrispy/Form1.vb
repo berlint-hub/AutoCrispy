@@ -1129,6 +1129,8 @@ Public Class Form1
 
     Private Sub ExeComboBox_SelectedIndexChanged(sender As Object, e As EventArgs) Handles ExeComboBox.SelectedIndexChanged
         SetSettingsWindow()
+        ' Switching backend shows or hides the Spandrel card, so the layout must be recalculated now.
+        If IsResponsiveLayoutReady Then ApplyResponsiveLayout()
     End Sub
 
     Private Sub InputBrowse_Click(sender As Object, e As EventArgs) Handles InputBrowse.Click
@@ -1808,7 +1810,11 @@ Public Class Form1
 
         ' Precision is placed by LayoutSpandrelResponsiveControls (it can share the Normal map row).
         Dim InCard As New HashSet(Of Control) From {PyPrecisionLabel, PyPrecisionComboBox}
-        Dim Cursor As Integer = PyModel.Bottom + Gap
+        ' The first row is as tall as its tallest control (the Catalog/Refresh buttons can be taller than the selector).
+        Dim FirstRowBottom As Integer = PyModel.Bottom
+        If BrowseOpenModelDbButton.Visible Then FirstRowBottom = Math.Max(FirstRowBottom, BrowseOpenModelDbButton.Bottom)
+        If RefreshSpandrelModelsButton.Visible Then FirstRowBottom = Math.Max(FirstRowBottom, RefreshSpandrelModelsButton.Bottom)
+        Dim Cursor As Integer = FirstRowBottom + Gap
         Dim CardBottom As Integer = Cursor
         For Each Row As Control() In Rows
             Dim VisibleItems As New List(Of Control)
