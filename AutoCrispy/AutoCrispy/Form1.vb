@@ -39,6 +39,9 @@ Public Class Form1
     Private ReadOnly UiToolTip As New ToolTip()
     Private ReadOnly SpandrelTilingBadge As New System.Windows.Forms.Label()
     Private ReadOnly BrowseOpenModelDbButton As New Button()
+    Private ReadOnly InstallSpandrelRuntimeButton As New Button()
+    Private ReadOnly SpandrelRuntimeSectionLabel As New Label()
+    Private ReadOnly SpandrelRuntimeHintLabel As New Label()
     Private ReadOnly GamePathProfiles As New BindingList(Of FormSettings.GamePathProfile)
     Private CurrentRunGamePaths As List(Of FormSettings.GamePathProfile)
     Private CurrentRunTempRoot As String = String.Empty
@@ -229,6 +232,7 @@ Public Class Form1
     Private Async Sub Form1_Load(sender As Object, e As EventArgs) Handles MyBase.Load
         Me.SetStyle(ControlStyles.OptimizedDoubleBuffer, True)
         InitializeSpandrelModelCard()
+        InitializeSpandrelRuntimeSetupControl()
         InitializeChainFriendlyUI()
         Application.CurrentCulture = New Globalization.CultureInfo("EN-US")
         PreloadImageList()
@@ -382,7 +386,8 @@ Public Class Form1
 
     Private Sub Form1_DpiChanged(sender As Object, e As DpiChangedEventArgs) Handles MyBase.DpiChanged
         If Not IsResponsiveLayoutReady Then Return
-        ' WinForms scales controls automatically; refresh the cached margins so later resizes do not reuse old-DPI coordinates.
+        ' WinForms scales controls automatically; refresh the runtime button and cached margins at the new DPI.
+        LayoutSpandrelRuntimeSetupControl()
         ConfigureResponsiveLayout()
         ApplyResponsiveLayout()
     End Sub
@@ -687,7 +692,7 @@ Public Class Form1
         If ModelFolders.Count = 0 Then
             SetupProblem = "No models folder found. Add checkpoints to the shared 'models' folder."
         ElseIf PythonExecutable = "" Then
-            SetupProblem = "Python was not found. See PLKSR_SETUP.md for setup instructions."
+            SetupProblem = "Python was not found. Use Advanced > Install / repair… to see setup options, or see PLKSR_SETUP.md."
         ElseIf Not File.Exists(RunnerPath) Then
             SetupProblem = "The Spandrel runner was not found beside AutoCrispy."
         End If
@@ -740,7 +745,7 @@ Public Class Form1
                 End If
                 If GetPreferredSpandrelBackendIndex() >= 0 Then ReplaceLegacyUpscalerChain()
             Else
-                SetModelScanStatus("No compatible checkpoints found (need 1× RGB restoration or 4× RGB SR).")
+                SetModelScanStatus("No compatible checkpoints found (need 1× RGB restoration or 4× RGB SR). If Python packages are missing, use Advanced > Install / repair…")
                 If String.Equals(If(ExeComboBox.SelectedItem, "").ToString(), SpandrelBackendName, StringComparison.OrdinalIgnoreCase) Then
                     ConfigurePythonModelSelector(SpandrelBackendName)
                 End If
@@ -1673,6 +1678,67 @@ Public Class Form1
         UiToolTip.SetToolTip(PyNormalMapModeComboBox,
             "Off leaves RGB unchanged. Normalize XYZ decodes and normalizes all three vector channels. " &
             "Rebuild Z ignores blue and reconstructs positive Z from red/green (for BC5/RG or RG0 maps).")
+    End Sub
+
+    Private Sub InitializeSpandrelRuntimeSetupControl()
+        SpandrelRuntimeSectionLabel.AutoSize = True
+        SpandrelRuntimeSectionLabel.Location = New Point(208, 132)
+        SpandrelRuntimeSectionLabel.Name = "SpandrelRuntimeSectionLabel"
+        SpandrelRuntimeSectionLabel.Text = "Model runtime:"
+        AdvSettingsGroup.Controls.Add(SpandrelRuntimeSectionLabel)
+
+        InstallSpandrelRuntimeButton.AccessibleName = "Install or repair the Spandrel Python runtime"
+        InstallSpandrelRuntimeButton.Location = New Point(322, 124)
+        InstallSpandrelRuntimeButton.Name = "InstallSpandrelRuntimeButton"
+        InstallSpandrelRuntimeButton.Size = New Size(196, 32)
+        InstallSpandrelRuntimeButton.TabIndex = 18
+        InstallSpandrelRuntimeButton.Text = "Install / repair…"
+        InstallSpandrelRuntimeButton.UseVisualStyleBackColor = True
+        AddHandler InstallSpandrelRuntimeButton.Click, AddressOf InstallSpandrelRuntimeButton_Click
+        AdvSettingsGroup.Controls.Add(InstallSpandrelRuntimeButton)
+
+        SpandrelRuntimeHintLabel.AutoEllipsis = True
+        SpandrelRuntimeHintLabel.Location = New Point(208, 160)
+        SpandrelRuntimeHintLabel.Name = "SpandrelRuntimeHintLabel"
+        SpandrelRuntimeHintLabel.Size = New Size(356, 20)
+        SpandrelRuntimeHintLabel.Text = "Python 3.10+ · PyTorch / TorchVision · Spandrel"
+        SpandrelRuntimeHintLabel.ForeColor = SystemColors.GrayText
+        AdvSettingsGroup.Controls.Add(SpandrelRuntimeHintLabel)
+
+        UiToolTip.SetToolTip(InstallSpandrelRuntimeButton,
+            "Check the Python AutoCrispy will use, then install or repair Spandrel, PyTorch, TorchVision, NumPy and Pillow.")
+        UiToolTip.SetToolTip(SpandrelRuntimeHintLabel,
+            "The Python packages are separate from model checkpoint weights. Use the PyTorch guide in the setup dialog for an NVIDIA CUDA build.")
+        LayoutSpandrelRuntimeSetupControl()
+    End Sub
+
+    Private Sub LayoutSpandrelRuntimeSetupControl()
+        Dim DpiScale As Double = Math.Max(1, AdvSettingsGroup.DeviceDpi) / 96.0
+        SpandrelRuntimeSectionLabel.Location = New Point(CInt(Math.Round(208 * DpiScale)), CInt(Math.Round(132 * DpiScale)))
+        InstallSpandrelRuntimeButton.Location = New Point(CInt(Math.Round(322 * DpiScale)), CInt(Math.Round(124 * DpiScale)))
+        InstallSpandrelRuntimeButton.Size = New Size(CInt(Math.Round(196 * DpiScale)), CInt(Math.Round(32 * DpiScale)))
+        SpandrelRuntimeHintLabel.Location = New Point(CInt(Math.Round(208 * DpiScale)), CInt(Math.Round(160 * DpiScale)))
+        SpandrelRuntimeHintLabel.Size = New Size(CInt(Math.Round(356 * DpiScale)), CInt(Math.Round(20 * DpiScale)))
+    End Sub
+
+    Private Async Sub InstallSpandrelRuntimeButton_Click(sender As Object, e As EventArgs)
+        If WorkHorse.IsBusy OrElse PreviewProcessCancellation IsNot Nothing Then
+            MessageBox.Show(Me, "Wait for the current model preview or processing job to finish before changing Python packages.",
+                            "Python runtime is busy", MessageBoxButtons.OK, MessageBoxIcon.Information)
+            Return
+        End If
+        If SpandrelScanCancellation IsNot Nothing Then
+            MessageBox.Show(Me, "Wait for the Spandrel model scan to finish before changing Python packages.",
+                            "Model scan is busy", MessageBoxButtons.OK, MessageBoxIcon.Information)
+            Return
+        End If
+
+        Dim PythonExecutable As String = FindPythonExecutable()
+        Using SetupDialog As New SpandrelRuntimeSetupDialog(PythonExecutable)
+            If SetupDialog.ShowDialog(Me) <> DialogResult.OK OrElse Not SetupDialog.SetupCompleted Then Return
+        End Using
+
+        Await RefreshSupportedSpandrelModels(Root)
     End Sub
 
     Private Sub LayoutSpandrelModelCard(ShowTilingBadge As Boolean)

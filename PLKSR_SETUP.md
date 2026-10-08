@@ -44,9 +44,11 @@ This is an experimental image-statistics heuristic, not a trained semantic class
 
 ## 2. Install the inference runtime
 
-Install **Python 3.10 or newer**. The selected Python must be on `PATH`, or `python.exe` must be beside AutoCrispy (or in a `python/` subfolder). If it is installed elsewhere, set the `AUTOCRISPY_PYTHON` environment variable to the full path to `python.exe`.
+Install **64-bit Python 3.10 or newer**. The selected Python must be on `PATH`, or `python.exe` must be beside AutoCrispy (or in a `python/` subfolder). If it is installed elsewhere, set the `AUTOCRISPY_PYTHON` environment variable to the full path to `python.exe`.
 
-Install a PyTorch build appropriate for the computer. For NVIDIA GPU acceleration, first use the official [PyTorch install selector](https://pytorch.org/get-started/locally/) to install the CUDA-enabled build. Then, in that same Python environment, run:
+For a guided setup, open **Advanced → Install / repair…** in AutoCrispy. It checks the Python executable AutoCrispy will use, then installs Spandrel 0.4.2, NumPy and Pillow; pip also installs PyTorch, TorchVision and their required dependencies. Model checkpoint weights are separate and are not downloaded by this installer.
+
+For NVIDIA GPU acceleration, first use the official [PyTorch install selector](https://pytorch.org/get-started/locally/) to install the CUDA-enabled build into the same Python environment AutoCrispy uses. Then return to **Advanced → Install / repair…** (or run the command below) to install Spandrel and image dependencies. The dialog also links to Python downloads if Python 3.10+ is not installed.
 
 ```bat
 python -m pip install "spandrel==0.4.2" Pillow numpy
