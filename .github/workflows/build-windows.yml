@@ -70,6 +70,15 @@ jobs:
           & .\layout-check.exe "AutoCrispy\AutoCrispy\bin\Release\AutoCrispy.exe"
           if ($LASTEXITCODE -ne 0) { throw "layout check found overlapping or clipped controls" }
 
+      - name: Upload layout screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoCrispy-layout-screenshots
+          path: layout-screens/*.png
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Upload Release build
         uses: actions/upload-artifact@v4
         with:

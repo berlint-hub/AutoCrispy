@@ -120,6 +120,7 @@ internal static class LayoutCheck
                     form.Size = size;
                     Pump(250);
                     Visit(form, scaleLabel + " window " + size.Width + "x" + size.Height);
+                    SaveScreenshot(form, scaleLabel, size);
                 }
             }
             catch (Exception ex)
@@ -187,6 +188,25 @@ internal static class LayoutCheck
             if (found != null) return found;
         }
         return null;
+    }
+
+    // Writes what the form actually draws, so a reviewer can see the layout in the artifact.
+    private static void SaveScreenshot(Form form, string scaleLabel, Size size)
+    {
+        try
+        {
+            Directory.CreateDirectory("layout-screens");
+            using (Bitmap bitmap = new Bitmap(form.Width, form.Height))
+            {
+                form.DrawToBitmap(bitmap, new Rectangle(0, 0, form.Width, form.Height));
+                string name = "layout-screens/" + scaleLabel.TrimEnd('%') + "pct-" + size.Width + "x" + size.Height + ".png";
+                bitmap.Save(name, System.Drawing.Imaging.ImageFormat.Png);
+            }
+        }
+        catch (Exception ex)
+        {
+            Warnings.Add("note screenshot failed: " + ex.Message);
+        }
     }
 
     private static void SelectSpandrel(Form form)
