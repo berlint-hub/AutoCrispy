@@ -81,6 +81,7 @@ Public Class Form1
     Private SpandrelScanGeneration As Integer = 0
     Private SpandrelScanCancellation As CancellationTokenSource
     Private ReadOnly ActiveProcessLock As New Object()
+    Private Shared ReadOnly ResumeCheckpointLock As New Object()
     Private ActiveProcesses As New List(Of Process)
     Private ReadOnly ProcessesBeingTerminated As New HashSet(Of Process)
     Private ReadOnly ProcessJobHandles As New Dictionary(Of Process, IntPtr)
@@ -126,6 +127,16 @@ Public Class Form1
                 Return Scale.ToString() & "× " & Purpose & " · " & Path.GetFileName(FilePath) & " (" & Architecture & ")"
             End Get
         End Property
+    End Class
+
+    Public Class BatchResumeCheckpoint
+        Public Property Version As Integer = 1
+        Public Property InProgress As New List(Of BatchResumeEntry)
+    End Class
+
+    Public Class BatchResumeEntry
+        Public Property InputPath As String = String.Empty
+        Public Property OutputExtensions As New List(Of String)
     End Class
 
     Private Class OverallProgressInfo
@@ -2343,9 +2354,13 @@ Public Class Form1
                 Dim AlphaFilteredCount As Integer = 0
                 Dim SupportedCount As Integer = 0
                 Dim MissingCount As Integer = 0
+                Dim ResumeInProgressPaths As HashSet(Of String) = GetResumeInProgressPaths(Profile.OutputPath)
                 Dim PendingFiles As String() = GetPendingInputFiles(AllInputFiles, Profile.OutputPath, SupportedExtensions, AlphaMode,
-                                                                      UnsupportedCount, AlphaFilteredCount, SupportedCount, MissingCount)
+                                                                      UnsupportedCount, AlphaFilteredCount, SupportedCount, MissingCount,
+                                                                      ResumeInProgressPaths)
                 If PendingFiles.Length > 0 Then Result.PendingProfiles.Add(CloneGamePathProfile(Profile))
+            Catch ex As InvalidDataException
+                If Result.ErrorMessage = String.Empty Then Result.ErrorMessage = ex.GetBaseException().Message
             Catch ex As IOException
                 Result.MissingProfileCount += 1
             Catch ex As UnauthorizedAccessException
@@ -2386,6 +2401,16 @@ Public Class Form1
             If Progress.AlphaFilteredCount > 0 Then SkippedSummary &= " · " & Progress.AlphaFilteredCount.ToString() & " skipped by alpha filter"
             QueueSummaryLabel.Text = Progress.DoneCount.ToString() & " / " & Progress.TotalCount.ToString() &
                 " textures complete (" & Percent.ToString() & "%)" & SkippedSummary
+
+            If Not WorkHorse.IsBusy AndAlso Not WatchDog.Enabled AndAlso WatchDogButton.Enabled Then
+                If Progress.TotalCount > 0 AndAlso Progress.DoneCount < Progress.TotalCount Then
+                    WatchDogButton.Text = "Resume batch"
+                    UiToolTip.SetToolTip(WatchDogButton, "Resume unfinished textures. Earlier completed batches are kept; outputs from the interrupted batch are safely retried.")
+                ElseIf WatchDogButton.Text <> "Stopping..." Then
+                    WatchDogButton.Text = "Running: False"
+                    UiToolTip.SetToolTip(WatchDogButton, "Start or stop the texture watcher.")
+                End If
+            End If
 
             If Progress.ErrorMessage <> String.Empty AndAlso Not WorkHorse.IsBusy Then
                 QueueActivityLabel.Text = "Input issue · " & Progress.ErrorMessage
@@ -2432,8 +2457,9 @@ Public Class Form1
                 Dim ProfileAlphaFilteredCount As Integer = 0
                 Dim SupportedCount As Integer = 0
                 Dim MissingCount As Integer = 0
+                Dim ResumeInProgressPaths As HashSet(Of String) = GetResumeInProgressPaths(Profile.OutputPath)
                 GetPendingInputFiles(AllInputFiles, Profile.OutputPath, SupportedExtensions, AlphaMode,
-                    ProfileUnsupportedCount, ProfileAlphaFilteredCount, SupportedCount, MissingCount)
+                    ProfileUnsupportedCount, ProfileAlphaFilteredCount, SupportedCount, MissingCount, ResumeInProgressPaths)
                 Result.UnsupportedCount += ProfileUnsupportedCount
                 Result.AlphaFilteredCount += ProfileAlphaFilteredCount
                 Result.TotalCount += SupportedCount - ProfileAlphaFilteredCount
@@ -2546,7 +2572,15 @@ Public Class Form1
     End Sub
 
     Private Sub MakeUpscaleForCurrentPaths(ProfileName As String)
+        If ChainList Is Nothing OrElse ChainList.Count = 0 Then
+            Throw New InvalidOperationException("The processing chain is empty. Add a backend before resuming the batch.")
+        End If
         Dim TempPath As String = GetChainPath("Temp", 0)
+        Dim ResumeCheckpoint As BatchResumeCheckpoint = LoadResumeCheckpoint(LoadedSettings.Paths.OutputPath)
+        Dim RecoveredCount As Integer = RecoverInterruptedBatch(LoadedSettings.Paths.OutputPath, ResumeCheckpoint)
+        If RecoveredCount > 0 Then
+            WorkHorse.ReportProgress(0, "Resuming · retrying " & RecoveredCount.ToString() & " interrupted texture(s)")
+        End If
         Dim ThreadCount As Integer = GetThreads(LoadedSettings.BasicSettings.ThreadIndex, LoadedSettings.BasicSettings.ThreadCount)
         If ThreadCount < 1 Then ThreadCount = 1
         Dim AllInputFiles As String() = GetInputFiles(LoadedSettings.Paths.InputPath, LoadedSettings.Paths.OutputPath)
@@ -2586,6 +2620,12 @@ Public Class Form1
             If WorkHorse.CancellationPending Then
                 CleanupUpscaleTemporaryFolders()
                 Return
+            End If
+            If CopiedInputs.Count > 0 Then
+                Dim BatchOutputExtensions As HashSet(Of String) = GetExpectedOutputExtensions(
+                    CopiedInputs, ChainList(ChainList.Count - 1).Package
+                )
+                MarkBatchInProgress(LoadedSettings.Paths.OutputPath, ResumeCheckpoint, CopiedInputs, BatchOutputExtensions)
             End If
 
             Dim BatchFiles As String() = Directory.GetFiles(TempPath)
@@ -2704,18 +2744,24 @@ Public Class Form1
             For Each ChainDir As String In DeletedChainPaths
                 If Directory.Exists(ChainDir) Then Directory.Delete(ChainDir, True)
             Next
-            Dim FinalOutputExtensions As HashSet(Of String) = Nothing
-            If ChainList.Count > 0 Then FinalOutputExtensions = GetPackageInputFileTypes(ChainList(ChainList.Count - 1).Package)
+            Dim FinalOutputExtensions As HashSet(Of String) = GetExpectedOutputExtensions(
+                CopiedInputs, ChainList(ChainList.Count - 1).Package)
             Dim FinalOutputs As Dictionary(Of String, String) = GetNonEmptyOutputsByStem(
                 LoadedSettings.Paths.OutputPath, FinalOutputExtensions)
+            Dim CompletedBatchInputs As New List(Of String)
             For Each CopiedInput As String In CopiedInputs
                 Dim Stem As String = Path.GetFileNameWithoutExtension(CopiedInput)
                 Dim CompletedStages As Integer = 0
                 If ChainList.Count > 0 AndAlso StageCounts.TryGetValue(Stem, CompletedStages) AndAlso
                     CompletedStages = ChainList.Count AndAlso FinalOutputs.ContainsKey(Stem) Then
-                    SuccessfullyProcessedInputs.Add(Path.GetFullPath(CopiedInput))
+                    Dim FullInputPath As String = Path.GetFullPath(CopiedInput)
+                    SuccessfullyProcessedInputs.Add(FullInputPath)
+                    CompletedBatchInputs.Add(FullInputPath)
                 End If
             Next
+            If CompletedBatchInputs.Count > 0 Then
+                MarkBatchComplete(LoadedSettings.Paths.OutputPath, ResumeCheckpoint, CompletedBatchInputs)
+            End If
 
             Dim ProgressPercentage As Integer = CInt(Math.Floor((CurrentIndex * 100.0) / Source.Count))
             WorkHorse.ReportProgress(Math.Max(0, Math.Min(100, ProgressPercentage)))
@@ -3762,7 +3808,13 @@ Public Class Form1
         Dim DoneNames As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
         If Directory.Exists(Path2) Then
             For Each DoneFile As String In Directory.GetFiles(Path2, "*.*", SearchOption.AllDirectories)
-                DoneNames.Add(Path.GetFileNameWithoutExtension(DoneFile))
+                Try
+                    If New FileInfo(DoneFile).Length > 0 Then DoneNames.Add(Path.GetFileNameWithoutExtension(DoneFile))
+                Catch ex As IOException
+                    ' A file still being written is not a completed output.
+                Catch ex As UnauthorizedAccessException
+                    ' Do not count an unreadable output as complete.
+                End Try
             Next
         End If
 
@@ -3819,20 +3871,187 @@ Public Class Form1
         Return Result.ToArray()
     End Function
 
+    Private Function GetResumeCheckpointPath(OutputFolder As String) As String
+        If String.IsNullOrWhiteSpace(OutputFolder) Then Throw New ArgumentException("An output folder is required for a resume checkpoint.", NameOf(OutputFolder))
+        Dim NormalizedOutputPath As String = Path.GetFullPath(OutputFolder)
+        Dim OutputRoot As String = Path.GetPathRoot(NormalizedOutputPath)
+        If Not String.Equals(NormalizedOutputPath, OutputRoot, StringComparison.OrdinalIgnoreCase) Then
+            NormalizedOutputPath = NormalizedOutputPath.TrimEnd(New Char() {Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar})
+        End If
+        NormalizedOutputPath = NormalizedOutputPath.ToUpperInvariant()
+        Using Hasher As System.Security.Cryptography.SHA256 = System.Security.Cryptography.SHA256.Create()
+            Dim PathHash As Byte() = Hasher.ComputeHash(System.Text.Encoding.UTF8.GetBytes(NormalizedOutputPath))
+            Dim CheckpointName As String = BitConverter.ToString(PathHash).Replace("-", String.Empty) & ".xml"
+            Return Path.Combine(AppData, "AutoCrispy", "Resume", CheckpointName)
+        End Using
+    End Function
+
+    Private Function LoadResumeCheckpoint(OutputFolder As String) As BatchResumeCheckpoint
+        Dim CheckpointPath As String = GetResumeCheckpointPath(OutputFolder)
+        SyncLock ResumeCheckpointLock
+            If Not File.Exists(CheckpointPath) Then Return New BatchResumeCheckpoint()
+            Try
+                Dim Checkpoint As BatchResumeCheckpoint = Nothing
+                Using CheckpointStream As New FileStream(CheckpointPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite Or FileShare.Delete)
+                    Dim Serializer As New Xml.Serialization.XmlSerializer(GetType(BatchResumeCheckpoint))
+                    Checkpoint = DirectCast(Serializer.Deserialize(CheckpointStream), BatchResumeCheckpoint)
+                End Using
+                If Checkpoint Is Nothing OrElse Checkpoint.Version <> 1 Then
+                    Throw New InvalidDataException("The resume checkpoint version is not supported.")
+                End If
+                If Checkpoint.InProgress Is Nothing Then Checkpoint.InProgress = New List(Of BatchResumeEntry)
+                For Each Entry As BatchResumeEntry In Checkpoint.InProgress
+                    If Entry Is Nothing OrElse String.IsNullOrWhiteSpace(Entry.InputPath) OrElse
+                        Entry.OutputExtensions Is Nothing OrElse Entry.OutputExtensions.Count = 0 Then
+                        Throw New InvalidDataException("The resume checkpoint contains an incomplete entry.")
+                    End If
+                Next
+                Return Checkpoint
+            Catch ex As Exception
+                Throw New InvalidDataException("AutoCrispy could not read the saved resume checkpoint at " & CheckpointPath &
+                    ". Processing has been stopped to avoid treating an incomplete texture as finished.", ex)
+            End Try
+        End SyncLock
+    End Function
+
+    Private Sub SaveResumeCheckpoint(OutputFolder As String, Checkpoint As BatchResumeCheckpoint)
+        Dim CheckpointPath As String = GetResumeCheckpointPath(OutputFolder)
+        SyncLock ResumeCheckpointLock
+            If Checkpoint.InProgress Is Nothing Then Checkpoint.InProgress = New List(Of BatchResumeEntry)
+            If Checkpoint.InProgress.Count = 0 Then
+                If File.Exists(CheckpointPath) Then File.Delete(CheckpointPath)
+                Return
+            End If
+
+            Checkpoint.Version = 1
+            Dim CheckpointDirectory As String = Path.GetDirectoryName(CheckpointPath)
+            Directory.CreateDirectory(CheckpointDirectory)
+            Dim TemporaryPath As String = CheckpointPath & "." & Guid.NewGuid().ToString("N") & ".tmp"
+            Try
+                Using CheckpointStream As New FileStream(TemporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None)
+                    Dim Serializer As New Xml.Serialization.XmlSerializer(GetType(BatchResumeCheckpoint))
+                    Serializer.Serialize(CheckpointStream, Checkpoint)
+                    CheckpointStream.Flush(True)
+                End Using
+                If File.Exists(CheckpointPath) Then
+                    File.Replace(TemporaryPath, CheckpointPath, Nothing)
+                Else
+                    File.Move(TemporaryPath, CheckpointPath)
+                End If
+            Finally
+                If File.Exists(TemporaryPath) Then
+                    Try
+                        File.Delete(TemporaryPath)
+                    Catch ex As Exception
+                        System.Diagnostics.Debug.WriteLine("Could not remove temporary resume checkpoint: " & ex.Message)
+                    End Try
+                End If
+            End Try
+        End SyncLock
+    End Sub
+
+    Private Function GetResumeInProgressPaths(OutputFolder As String) As HashSet(Of String)
+        Dim Result As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+        For Each Entry As BatchResumeEntry In LoadResumeCheckpoint(OutputFolder).InProgress
+            Result.Add(Path.GetFullPath(Entry.InputPath))
+        Next
+        Return Result
+    End Function
+
+    Private Sub MarkBatchInProgress(OutputFolder As String, Checkpoint As BatchResumeCheckpoint,
+                                    Inputs As IEnumerable(Of String), OutputExtensions As HashSet(Of String))
+        If Inputs Is Nothing Then Return
+        If OutputExtensions Is Nothing OrElse OutputExtensions.Count = 0 Then
+            Throw New InvalidOperationException("Cannot save a safe resume checkpoint because the output image format could not be determined.")
+        End If
+        For Each InputPath As String In Inputs
+            If Not File.Exists(InputPath) Then Throw New FileNotFoundException("A batch input disappeared before it could be checkpointed.", InputPath)
+            Dim FullInputPath As String = Path.GetFullPath(InputPath)
+            Checkpoint.InProgress.RemoveAll(Function(Existing As BatchResumeEntry) _
+                String.Equals(Path.GetFullPath(Existing.InputPath), FullInputPath, StringComparison.OrdinalIgnoreCase))
+            Dim Entry As New BatchResumeEntry With {
+                .InputPath = FullInputPath,
+                .OutputExtensions = New List(Of String)(OutputExtensions)
+            }
+            Checkpoint.InProgress.Add(Entry)
+        Next
+        SaveResumeCheckpoint(OutputFolder, Checkpoint)
+    End Sub
+
+    Private Sub MarkBatchComplete(OutputFolder As String, Checkpoint As BatchResumeCheckpoint, Inputs As IEnumerable(Of String))
+        If Inputs Is Nothing Then Return
+        For Each InputPath As String In Inputs
+            Dim FullInputPath As String = Path.GetFullPath(InputPath)
+            Checkpoint.InProgress.RemoveAll(Function(Existing As BatchResumeEntry) _
+                String.Equals(Path.GetFullPath(Existing.InputPath), FullInputPath, StringComparison.OrdinalIgnoreCase))
+        Next
+        SaveResumeCheckpoint(OutputFolder, Checkpoint)
+    End Sub
+
+    Private Function RecoverInterruptedBatch(OutputFolder As String, Checkpoint As BatchResumeCheckpoint) As Integer
+        If Checkpoint Is Nothing OrElse Checkpoint.InProgress Is Nothing OrElse Checkpoint.InProgress.Count = 0 Then Return 0
+
+        Dim AllowedExtensionsByStem As New Dictionary(Of String, HashSet(Of String))(StringComparer.OrdinalIgnoreCase)
+        For Each Entry As BatchResumeEntry In Checkpoint.InProgress
+            Dim Stem As String = Path.GetFileNameWithoutExtension(Entry.InputPath)
+            Dim EntryExtensions As HashSet(Of String) = Nothing
+            If Not AllowedExtensionsByStem.TryGetValue(Stem, EntryExtensions) Then
+                EntryExtensions = New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+                AllowedExtensionsByStem.Add(Stem, EntryExtensions)
+            End If
+            For Each Extension As String In Entry.OutputExtensions
+                If Not String.IsNullOrWhiteSpace(Extension) Then EntryExtensions.Add(Extension)
+            Next
+        Next
+        If AllowedExtensionsByStem.Count = 0 OrElse
+            Not AllowedExtensionsByStem.Values.Any(Function(Extensions As HashSet(Of String)) Extensions.Count > 0) Then
+            Throw New InvalidDataException("The saved resume checkpoint has no safe output paths to recover.")
+        End If
+
+        If Directory.Exists(OutputFolder) Then
+            For Each Candidate As String In Directory.GetFiles(OutputFolder, "*.*", SearchOption.AllDirectories)
+                Dim CandidateExtensions As HashSet(Of String) = Nothing
+                If Not AllowedExtensionsByStem.TryGetValue(Path.GetFileNameWithoutExtension(Candidate), CandidateExtensions) OrElse
+                    Not CandidateExtensions.Contains(Path.GetExtension(Candidate)) Then Continue For
+                Try
+                    File.Delete(Candidate)
+                Catch ex As Exception
+                    Throw New IOException("AutoCrispy could not remove an incomplete output while resuming: " & Candidate, ex)
+                End Try
+            Next
+        End If
+
+        Dim RecoveredCount As Integer = Checkpoint.InProgress.Count
+        Checkpoint.InProgress.Clear()
+        SaveResumeCheckpoint(OutputFolder, Checkpoint)
+        Return RecoveredCount
+    End Function
+
     Private Function GetPendingInputFiles(InputFiles As String(), OutputPath As String, SupportedExtensions As HashSet(Of String),
                                           AlphaMode As Integer, ByRef UnsupportedCount As Integer,
                                           ByRef AlphaFilteredCount As Integer, ByRef SupportedCount As Integer,
-                                          ByRef MissingCount As Integer) As String()
+                                          ByRef MissingCount As Integer,
+                                          Optional ResumeInProgressPaths As HashSet(Of String) = Nothing) As String()
         Dim SupportedFiles As String() = GetSupportedInputFiles(InputFiles, SupportedExtensions)
         EnsureNoFlattenedNameCollisions(SupportedFiles)
         UnsupportedCount = If(InputFiles Is Nothing, 0, InputFiles.Length - SupportedFiles.Length)
         SupportedCount = SupportedFiles.Length
-        Dim MissingFiles As String() = GetMissingFiles(SupportedFiles, OutputPath)
-        MissingCount = MissingFiles.Length
+        Dim MissingList As New List(Of String)(GetMissingFiles(SupportedFiles, OutputPath))
+        Dim MissingPaths As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+        For Each MissingFile As String In MissingList
+            MissingPaths.Add(Path.GetFullPath(MissingFile))
+        Next
+        If ResumeInProgressPaths IsNot Nothing Then
+            For Each SupportedFile As String In SupportedFiles
+                Dim FullPath As String = Path.GetFullPath(SupportedFile)
+                If ResumeInProgressPaths.Contains(FullPath) AndAlso MissingPaths.Add(FullPath) Then MissingList.Add(SupportedFile)
+            Next
+        End If
+        MissingCount = MissingList.Count
         AlphaFilteredCount = 0
 
         Dim PendingFiles As New List(Of String)
-        For Each MissingFile As String In MissingFiles
+        For Each MissingFile As String In MissingList
             If IsAlphaFiltered(MissingFile, AlphaMode) Then
                 AlphaFilteredCount += 1
             Else
