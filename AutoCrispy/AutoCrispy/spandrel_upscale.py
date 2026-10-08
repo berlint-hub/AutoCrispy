@@ -115,6 +115,15 @@ def parse_args() -> argparse.Namespace:
         help="Auto uses supported FP16 on CUDA; explicit FP16 requires checkpoint support; FP32 disables TF32",
     )
     parser.add_argument(
+        "--normal-map-mode",
+        choices=("none", "normalize-xyz", "rebuild-z"),
+        default="none",
+        help=(
+            "Optional post-processing for tangent-space normals: normalize XYZ, "
+            "or rebuild positive Z from R/G (BC5/RG normals)"
+        ),
+    )
+    parser.add_argument(
         "--cpu", action="store_true", help="Force CPU inference instead of CUDA"
     )
     parser.add_argument(
@@ -440,6 +449,40 @@ def _upscale_with_fallback(
             )
 
 
+def _postprocess_normal_map(rgb: Any, mode: str) -> Any:
+    """Repair vector lengths after RGB upscaling when the output is a normal map."""
+    mode = str(mode).strip().casefold()
+    if mode == "none":
+        return rgb
+    if mode not in {"normalize-xyz", "rebuild-z"}:
+        raise ValueError(f"Unsupported normal-map mode: {mode}")
+
+    import numpy as np
+
+    encoded = np.asarray(rgb, dtype=np.float32)
+    if encoded.ndim != 3 or encoded.shape[2] != 3:
+        raise ValueError("Normal-map post-processing expects an H×W×3 RGB image.")
+
+    normals = encoded * 2.0 - 1.0
+    if mode == "normalize-xyz":
+        lengths = np.linalg.norm(normals, axis=2, keepdims=True)
+        zero_length = lengths[:, :, 0] <= 1e-8
+        normals = normals / np.maximum(lengths, 1e-8)
+        if bool(np.any(zero_length)):
+            normals[zero_length] = (0.0, 0.0, 1.0)
+    else:
+        xy = normals[:, :, :2].copy()
+        xy_lengths = np.linalg.norm(xy, axis=2, keepdims=True)
+        # Clamp invalid XY vectors to the unit circle before reconstructing Z.
+        outside_unit_disk = xy_lengths[:, :, 0] >= 1.0
+        xy = xy / np.maximum(xy_lengths, 1.0)
+        z = np.sqrt(np.maximum(1.0 - np.sum(xy * xy, axis=2, keepdims=True), 0.0))
+        z = np.where(outside_unit_disk[:, :, None], 0.0, z)
+        normals = np.concatenate((xy, z), axis=2)
+
+    return np.clip((normals + 1.0) * 0.5, 0.0, 1.0)
+
+
 def _process_image(
     input_path: Path,
     output_path: Path,
@@ -447,6 +490,7 @@ def _process_image(
     device: Any,
     dtype: Any,
     tile_size: int,
+    normal_map_mode: str = "none",
 ) -> None:
     import numpy as np
     from PIL import Image, ImageOps
@@ -467,6 +511,7 @@ def _process_image(
 
     rgb_float = rgb.astype(np.float32) / 255.0
     upscaled = _upscale_with_fallback(rgb_float, model, device, dtype, tile_size)
+    upscaled = _postprocess_normal_map(upscaled, normal_map_mode)
     upscaled = np.clip(np.rint(upscaled * 255.0), 0, 255).astype(np.uint8)
     model_scale = int(model.scale)
     expected_size = (rgb.shape[1] * model_scale, rgb.shape[0] * model_scale)
@@ -885,6 +930,7 @@ def _run_auto_route(args: argparse.Namespace) -> int:
             device,
             dtype,
             args.tile_size,
+            getattr(args, "normal_map_mode", "none"),
         )
         print(
             f"AUTOCRISPY_RESULT: {index}/{len(files)} · {role} · {input_path.name} · OK",
@@ -1016,6 +1062,7 @@ def run(args: argparse.Namespace) -> int:
                 device,
                 dtype,
                 args.tile_size,
+                getattr(args, "normal_map_mode", "none"),
             )
         except Exception as error:
             raise RuntimeError(

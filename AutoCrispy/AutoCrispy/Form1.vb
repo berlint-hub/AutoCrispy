@@ -305,6 +305,8 @@ Public Class Form1
         SeamMargin.Anchor = AnchorStyles.Top Or AnchorStyles.Right
 
         PyModel.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
+        PyNormalMapModeLabel.Anchor = AnchorStyles.Top Or AnchorStyles.Left
+        PyNormalMapModeComboBox.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
         RefreshSpandrelModelsButton.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         SpandrelModelInfoLabel.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
         SpandrelScanStatusLabel.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
@@ -990,7 +992,8 @@ Public Class Form1
             If ChainItem.PackageType = "ESRGAN" AndAlso ChainItem.Package IsNot Nothing Then
                 Dim PythonSettings As FormSettings.PythonPackage = CType(ChainItem.Package, FormSettings.PythonPackage)
                 If String.Equals(Path.GetFileNameWithoutExtension(PythonSettings.Model), "4x_gameai_2.0", StringComparison.OrdinalIgnoreCase) Then
-                    PythonSettings = New FormSettings.PythonPackage(PreferredModel, PythonSettings.TileSize, PythonSettings.CPUOnly, True, _Precision:=PythonSettings.Precision)
+                    PythonSettings = New FormSettings.PythonPackage(PreferredModel, PythonSettings.TileSize, PythonSettings.CPUOnly, True,
+                        _Precision:=PythonSettings.Precision, _NormalMapMode:=PythonSettings.NormalMapMode)
                     ChainItem.Name = PreferredName
                     ChainItem.FileLocation = ""
                     ChainItem.Package = PythonSettings
@@ -1487,6 +1490,10 @@ Public Class Form1
         LayoutSpandrelModelCard(False)
         AddHandler PyPrecisionComboBox.SelectedIndexChanged, AddressOf PyPrecisionComboBox_SelectedIndexChanged
         UiToolTip.SetToolTip(Label25, "Maximum input tile edge in pixels. Set to 0 to try a full image first.")
+        UiToolTip.SetToolTip(PyNormalMapModeLabel, "Select a normal-map post-process only when the input textures are tangent-space normal maps.")
+        UiToolTip.SetToolTip(PyNormalMapModeComboBox,
+            "Off leaves RGB unchanged. Normalize XYZ decodes and normalizes all three vector channels. " &
+            "Rebuild Z ignores blue and reconstructs positive Z from red/green (for BC5/RG or RG0 maps).")
     End Sub
 
     Private Sub LayoutSpandrelModelCard(ShowTilingBadge As Boolean)
@@ -1665,6 +1672,9 @@ Public Class Form1
         PyPrecisionComboBox.Enabled = UsesSpandrelRunner AndAlso Not PyCPU.Checked
         UiToolTip.SetToolTip(PyPrecisionComboBox,
             "Auto uses supported FP16 on CUDA. If a checkpoint cannot use FP16, AutoCrispy switches to Auto/FP32; FP32 disables TF32.")
+        PyNormalMapModeLabel.Visible = UsesSpandrelRunner
+        PyNormalMapModeComboBox.Visible = UsesSpandrelRunner
+        PyNormalMapModeComboBox.Enabled = UsesSpandrelRunner
         SpandrelModelInfoLabel.Visible = IsSpandrelSelected
         LayoutSpandrelModelCard(IsSpandrelSelected)
         SpandrelScanStatusLabel.Visible = IsSpandrelSelected
@@ -2090,6 +2100,39 @@ Public Class Form1
         PyPrecisionComboBox.Enabled = Not PyCPU.Checked AndAlso IsSpandrelPackageType(If(ExeComboBox.SelectedItem, "").ToString())
     End Sub
 
+    Public Function GetSelectedNormalMapMode() As String
+        Select Case PyNormalMapModeComboBox.SelectedIndex
+            Case 1
+                Return "normalize-xyz"
+            Case 2
+                Return "rebuild-z"
+            Case Else
+                Return "none"
+        End Select
+    End Function
+
+    Public Sub LoadNormalMapMode(NormalMapMode As String)
+        Select Case If(NormalMapMode, String.Empty).Trim().ToLowerInvariant()
+            Case "normalize-xyz"
+                PyNormalMapModeComboBox.SelectedIndex = 1
+            Case "rebuild-z"
+                PyNormalMapModeComboBox.SelectedIndex = 2
+            Case Else
+                PyNormalMapModeComboBox.SelectedIndex = 0
+        End Select
+    End Sub
+
+    Private Function AppendNormalMapModeSuffix(StepName As String, NormalMapMode As String) As String
+        Select Case If(NormalMapMode, String.Empty).Trim().ToLowerInvariant()
+            Case "normalize-xyz"
+                Return StepName & " · Normalize XYZ"
+            Case "rebuild-z"
+                Return StepName & " · Rebuild Z"
+            Case Else
+                Return StepName
+        End Select
+    End Function
+
     Private Sub PyCPU_CheckedChanged(sender As Object, e As EventArgs) Handles PyCPU.CheckedChanged
         If PyCPU.Checked AndAlso PyPrecisionComboBox.SelectedIndex = 1 Then
             PyPrecisionComboBox.SelectedIndex = 0
@@ -2115,13 +2158,13 @@ Public Class Form1
                 LastSelectedArchitectModelPath = ArchitectPath
                 LastSelectedPainterModelPath = PainterPath
                 Return New FormSettings.PythonPackage(AutoTextureRouterToken, CInt(PyTileSize.Value), PyCPU.Checked, True, True,
-                    ArchitectPath, PainterPath, CInt(AutoPainterSharePercent.Value), CDec(AutoPainterThreshold.Value), GetSelectedInferencePrecision())
+                    ArchitectPath, PainterPath, CInt(AutoPainterSharePercent.Value), CDec(AutoPainterThreshold.Value), GetSelectedInferencePrecision(), GetSelectedNormalMapMode())
             End If
         End If
         Dim ArchitectPreference As String = If(IncludeRoutePreferences, LastSelectedArchitectModelPath, String.Empty)
         Dim PainterPreference As String = If(IncludeRoutePreferences, LastSelectedPainterModelPath, String.Empty)
         Return New FormSettings.PythonPackage(GetSelectedUpscaleModel(), CInt(PyTileSize.Value), PyCPU.Checked, UseSpandrelFormats,
-            False, ArchitectPreference, PainterPreference, CInt(AutoPainterSharePercent.Value), CDec(AutoPainterThreshold.Value), GetSelectedInferencePrecision())
+            False, ArchitectPreference, PainterPreference, CInt(AutoPainterSharePercent.Value), CDec(AutoPainterThreshold.Value), GetSelectedInferencePrecision(), GetSelectedNormalMapMode())
     End Function
 
     Sub MoveShowGroup(ByRef Source As GroupBox)
@@ -3147,7 +3190,8 @@ Public Class Form1
     End Sub
 
     Private Function IsSpandrelPackageType(PackageType As String) As Boolean
-        Return PackageType = "RealPLKSR" OrElse PackageType = DAT2BackendName OrElse PackageType = SpandrelBackendName
+        Return PackageType = PLKSRBackendName OrElse PackageType = "RealPLKSR" OrElse
+            PackageType = DAT2BackendName OrElse PackageType = SpandrelBackendName
     End Function
 
     Private Function GetChainPath(PathType As String, PathIndex As Integer) As String
@@ -3222,11 +3266,13 @@ Public Class Form1
                 ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, "ESRGAN", ChainThumbs.Item(6)))
                 ChainList.Add(New FormSettings.ChainObject("ESRGAN", 6, PyPath, "ESRGAN", Me))
             Case PLKSRBackendName
-                ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, "PLKSR 4x", ChainThumbs.Item(6)))
-                ChainList.Add(New FormSettings.ChainObject("PLKSR 4x", 6, "", "RealPLKSR", Me))
+                Dim PLKSRStepName As String = AppendNormalMapModeSuffix("PLKSR 4x", GetSelectedNormalMapMode())
+                ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, PLKSRStepName, ChainThumbs.Item(6)))
+                ChainList.Add(New FormSettings.ChainObject(PLKSRStepName, 6, "", "RealPLKSR", Me))
             Case DAT2BackendName
-                ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, "PBRify V4 DAT2 4x", ChainThumbs.Item(6)))
-                ChainList.Add(New FormSettings.ChainObject("PBRify V4 DAT2 4x", 6, "", DAT2BackendName, Me))
+                Dim DAT2StepName As String = AppendNormalMapModeSuffix("PBRify V4 DAT2 4x", GetSelectedNormalMapMode())
+                ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.Count, DAT2StepName, ChainThumbs.Item(6)))
+                ChainList.Add(New FormSettings.ChainObject(DAT2StepName, 6, "", DAT2BackendName, Me))
             Case SpandrelBackendName
                 Dim SelectedPackage As FormSettings.PythonPackage = GetSelectedPythonPackage()
                 Dim ModelDisplayName As String = "Spandrel - " & Path.GetFileName(SelectedPackage.Model)
@@ -3234,6 +3280,7 @@ Public Class Form1
                     ModelDisplayName = "Spandrel - Auto (" & Path.GetFileName(SelectedPackage.ArchitectModel) & " / " &
                         Path.GetFileName(SelectedPackage.PainterModel) & ", " & CInt(AutoPainterSharePercent.Value).ToString() & "% Painter)"
                 End If
+                ModelDisplayName = AppendNormalMapModeSuffix(ModelDisplayName, SelectedPackage.NormalMapMode)
                 Dim UpdatedChainItem As New FormSettings.ChainObject(ModelDisplayName, 6, "", SpandrelBackendName, Me)
                 Dim ExistingSpandrelIndex As Integer = If(ForceAppend, -1, FindLatestSpandrelChainItemIndex())
                 If ExistingSpandrelIndex >= 0 Then
@@ -3376,6 +3423,9 @@ Public Class Form1
         Dim Precision As String = If(String.IsNullOrWhiteSpace(Package.Precision), "auto", Package.Precision.Trim().ToLowerInvariant())
         If Precision <> "auto" AndAlso Precision <> "fp16" AndAlso Precision <> "fp32" Then Precision = "auto"
         Result.AddArguement("--precision", Precision)
+        Dim NormalMapMode As String = If(String.IsNullOrWhiteSpace(Package.NormalMapMode), "none", Package.NormalMapMode.Trim().ToLowerInvariant())
+        If NormalMapMode <> "normalize-xyz" AndAlso NormalMapMode <> "rebuild-z" Then NormalMapMode = "none"
+        Result.AddArguement("--normal-map-mode", NormalMapMode)
         Result.AddArguement("--tile-size", Package.TileSize.ToString())
         Result.AddArguement("--cpu", Package.CPUOnly)
         If GenericModel Then Result.AddArguement("--generic-model")

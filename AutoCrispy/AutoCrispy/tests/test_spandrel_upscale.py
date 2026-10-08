@@ -1,4 +1,4 @@
-"""Dependency-free tests for the Spandrel checkpoint selection logic."""
+"""Tests for the Spandrel checkpoint selection and image post-processing logic."""
 
 from __future__ import annotations
 
@@ -11,6 +11,9 @@ import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+import numpy as np
+from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import spandrel_upscale as runner  # noqa: E402
@@ -95,6 +98,66 @@ class SpandrelRunnerTests(unittest.TestCase):
 
         spandrel.ModelLoader = ModelLoader
         return torch, spandrel
+
+    def test_normal_map_xyz_mode_renormalizes_vectors_and_handles_zero_length(self) -> None:
+        source = np.asarray(
+            [[[0.75, 0.625, 0.875], [0.1, 0.3, 0.8], [0.5, 0.5, 0.5]]],
+            dtype=np.float32,
+        )
+        output = runner._postprocess_normal_map(source, "normalize-xyz")
+        decoded = output * 2.0 - 1.0
+
+        np.testing.assert_allclose(np.linalg.norm(decoded, axis=2), 1.0, atol=1e-6)
+        source_vector = source[0, 0] * 2.0 - 1.0
+        expected_direction = source_vector / np.linalg.norm(source_vector)
+        np.testing.assert_allclose(decoded[0, 0], expected_direction, atol=1e-6)
+        np.testing.assert_array_equal(output[0, 2], [0.5, 0.5, 1.0])
+
+    def test_normal_map_rebuild_z_uses_xy_and_clamps_invalid_vectors(self) -> None:
+        source = np.asarray(
+            [[[0.5, 0.5, 0.0], [1.0, 0.5, 0.0], [1.0, 1.0, 0.0]]],
+            dtype=np.float32,
+        )
+        output = runner._postprocess_normal_map(source, "rebuild-z")
+        decoded = output * 2.0 - 1.0
+
+        np.testing.assert_allclose(np.linalg.norm(decoded, axis=2), 1.0, atol=1e-6)
+        np.testing.assert_allclose(decoded[0, :, 2], [1.0, 0.0, 0.0], atol=1e-6)
+        self.assertTrue(bool(np.all(decoded[0, :, 2] >= 0.0)))
+
+    def test_normal_map_none_is_unchanged_and_unknown_modes_are_rejected(self) -> None:
+        source = np.zeros((1, 1, 3), dtype=np.float32)
+        self.assertIs(runner._postprocess_normal_map(source, "none"), source)
+        with self.assertRaisesRegex(ValueError, "Unsupported normal-map mode"):
+            runner._postprocess_normal_map(source, "auto")
+
+    def test_normal_map_mode_preserves_alpha_during_image_save(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_path = root / "input.png"
+            output_path = root / "output.png"
+            source = Image.new("RGBA", (2, 1))
+            source.putdata([(128, 128, 0, 37), (255, 128, 0, 211)])
+            source.save(input_path)
+            upscaled = np.asarray(
+                [[[0.5, 0.5, 0.0], [1.0, 0.5, 0.0]]], dtype=np.float32
+            )
+
+            with patch.object(runner, "_upscale_with_fallback", return_value=upscaled):
+                runner._process_image(
+                    input_path,
+                    output_path,
+                    types.SimpleNamespace(scale=1),
+                    FakeDevice("cpu"),
+                    "float32",
+                    0,
+                    "rebuild-z",
+                )
+
+            with Image.open(output_path) as result:
+                self.assertEqual(result.mode, "RGBA")
+                self.assertEqual(result.getpixel((0, 0)), (128, 128, 255, 37))
+                self.assertEqual(result.getpixel((1, 0)), (255, 128, 128, 211))
 
     def test_listing_outputs_only_eligible_recognized_models_and_is_depth_limited(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -604,6 +667,7 @@ class SpandrelRunnerTests(unittest.TestCase):
             self.assertEqual(args.tile_size, 1024)
             self.assertEqual(args.cpu_threads, 0)
             self.assertEqual(args.precision, "auto")
+            self.assertEqual(args.normal_map_mode, "none")
             self.assertEqual(args.model, model_path)
             self.assertIsNone(args.architect_model)
             self.assertIsNone(args.painter_model)
@@ -627,6 +691,26 @@ class SpandrelRunnerTests(unittest.TestCase):
             ):
                 args = runner.parse_args()
             self.assertEqual(args.precision, "fp32")
+
+    def test_cli_accepts_rebuilding_normal_map_z(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with patch.object(
+                sys,
+                "argv",
+                [
+                    "spandrel_upscale.py",
+                    str(root / "model.pth"),
+                    "--input",
+                    str(root / "input"),
+                    "--output",
+                    str(root / "output"),
+                    "--normal-map-mode",
+                    "rebuild-z",
+                ],
+            ):
+                args = runner.parse_args()
+            self.assertEqual(args.normal_map_mode, "rebuild-z")
 
     def test_preview_route_cli_needs_only_an_input_folder(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
