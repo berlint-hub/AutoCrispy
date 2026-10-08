@@ -60,6 +60,16 @@ jobs:
             }
           }
 
+      - name: Check main window layout (overlaps and clipping)
+        shell: pwsh
+        timeout-minutes: 8
+        run: |
+          $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          & $csc /nologo /target:exe /out:layout-check.exe /r:System.Windows.Forms.dll /r:System.Drawing.dll .github\layout-check\LayoutCheck.cs
+          if ($LASTEXITCODE -ne 0) { throw "layout checker did not compile" }
+          & .\layout-check.exe "AutoCrispy\AutoCrispy\bin\Release\AutoCrispy.exe"
+          if ($LASTEXITCODE -ne 0) { throw "layout check found overlapping or clipped controls" }
+
       - name: Upload Release build
         uses: actions/upload-artifact@v4
         with:
