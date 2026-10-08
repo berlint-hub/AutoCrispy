@@ -13,7 +13,7 @@ _Last updated: 2026-10-08 (Europe/Prague). Read this before continuing repositor
 
 - **Spandrel main-window layout: GOLD RELEASE.** The user confirmed everything works well. The old responsive code was replaced by a single layout engine (`ApplyResponsiveLayout` / `LayoutMainWindow` / `LayoutSpandrelCard` in `AutoCrispy/AutoCrispy/Form1.vb`) that sets a computed `MinimumSize`, so Spandrel controls (Catalog…/Refresh, the EXTERNAL TILING OK badge, the model info bar) no longer overlap at 100/125/150% or when resized. Verified by the layout check in CI, run [37796492956](https://github.com/berlint-hub/AutoCrispy/actions/runs/37796492956) (success, zero overlaps or clipping).
 - Keep the layout check in `.github/layout-check/LayoutCheck.cs` passing before changing any main-window layout code.
-- The open stop/cancellation issue below is still unresolved.
+- The stop/cancellation issue below: on 2026-10-08 the user reported that stopping now works without problems.
 
 ## Completed work
 
@@ -42,7 +42,7 @@ _Last updated: 2026-10-08 (Europe/Prague). Read this before continuing repositor
 
 - Added persistent input/output path profiles for multiple games, with checkboxes controlling which profiles the watcher/upscaler uses; old single input/output settings migrate to a profile.
 - Commit `279e2a3` added persistent game input/output path profiles; queue cancellation also requests `BackgroundWorker` cancellation, kills registered active processes, cleans temporary work, and restores the UI to `Running: False` after cancellation.
-- **Open issue reported by the user on 2026-10-07:** “When I want to stop, it keeps running.” Do not assume cancellation is fixed just because the current UI completion handler sets `Running: False`; verify that the actual backend/Python process and output writes stop. The current code calls `CancelAsync()` and `StopActiveProcesses()`, tracks active `Process` objects, and uses `Process.Kill()`; cancellation is checked while waiting and between pipeline stages. The latest user report has not yet been reproduced or fixed.
+- **Issue reported by the user on 2026-10-07 (reported working on 2026-10-08):** “When I want to stop, it keeps running.” Do not assume cancellation is fixed just because the current UI completion handler sets `Running: False`; verify that the actual backend/Python process and output writes stop. The current code calls `CancelAsync()` and `StopActiveProcesses()`, tracks active `Process` objects, and uses `Process.Kill()`; cancellation is checked while waiting and between pipeline stages. The latest user report has not yet been reproduced or fixed.
 - Investigate whether the stop click is stopping only the watcher or an active `WorkHorse`, whether an external process tree/child survives killing its parent, and whether work is in a long non-interruptible preprocessing step. Confirm behavior for the user's Auto-routing/Spandrel path as well as other backends if possible. A process-tree termination strategy may be needed; this is a hypothesis, not a confirmed root cause. Preserve queue cleanup and the final `Running: False` state.
 
 ## Verification already completed
