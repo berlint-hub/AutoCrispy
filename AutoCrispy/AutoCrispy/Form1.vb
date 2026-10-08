@@ -375,9 +375,11 @@ Public Class Form1
             Dim ClientWidth As Integer = ClientSize.Width
             Dim ClientHeight As Integer = ClientSize.Height
             TabGroup.Width = Math.Max(ResponsiveTabMinimumWidth, ClientWidth - TabGroup.Left - ResponsiveTabRightMargin)
-            SettingsGroup.Height = Math.Max(ResponsiveSettingsMinimumHeight, ClientHeight - SettingsGroup.Top - ResponsiveSettingsBottomMargin)
-            RunOnceButton.Top = ClientHeight - ResponsiveActionBottomMargin - RunOnceButton.Height
-            WatchDogButton.Top = ClientHeight - ResponsiveActionBottomMargin - WatchDogButton.Height
+            ' Action buttons sit at the bottom; the settings panel always ends above them.
+            Dim ActionTop As Integer = ClientHeight - ResponsiveActionBottomMargin - Math.Max(RunOnceButton.Height, WatchDogButton.Height)
+            RunOnceButton.Top = ActionTop
+            WatchDogButton.Top = ActionTop
+            SettingsGroup.Height = Math.Max(ResponsiveSettingsMinimumHeight, ActionTop - ScaleForDpi(10) - SettingsGroup.Top)
 
             SettingsLoc = New Point(SettingsGroup.Right + 16, SettingsGroup.Top)
             Dim PanelWidth As Integer = Math.Max(ResponsivePanelMinimumWidth, ClientWidth - SettingsLoc.X - ResponsivePanelRightMargin)
@@ -1891,7 +1893,7 @@ Public Class Form1
 
         Dim ClientWidth As Integer = PyGroup.ClientSize.Width
         Dim RightMargin As Integer = Math.Max(4, PyGroup.Padding.Right + 2)
-        Dim LabelGap As Integer = Math.Max(4, PyNormalMapModeComboBox.Left - PyNormalMapModeLabel.Right)
+        Dim LabelGap As Integer = Math.Max(4, PyNormalMapModeComboBox.Left - (PyNormalMapModeLabel.Left + Math.Max(PyNormalMapModeLabel.Width, PyNormalMapModeLabel.PreferredWidth)))
         Dim PrecisionLabelWidth As Integer = Math.Max(
             PyPrecisionLabel.Width,
             TextRenderer.MeasureText(PyPrecisionLabel.Text, PyPrecisionLabel.Font).Width
@@ -1924,7 +1926,7 @@ Public Class Form1
 
         ' On narrower forms share the Normal Map row: this keeps Precision away from CPU only
         ' and lets both dropdowns shrink safely instead of painting over neighbouring controls.
-        Dim NormalMapLeft As Integer = PyNormalMapModeLabel.Right + LabelGap
+        Dim NormalMapLeft As Integer = PyNormalMapModeLabel.Left + Math.Max(PyNormalMapModeLabel.Width, PyNormalMapModeLabel.PreferredWidth) + LabelGap
         Dim PrecisionRowTop As Integer = PyNormalMapModeComboBox.Top
         Dim AvailableWidth As Integer = Math.Max(2, ClientWidth - RightMargin - NormalMapLeft)
         Dim ComboSpace As Integer = Math.Max(2, AvailableWidth - (2 * LabelGap) - PrecisionLabelWidth)
