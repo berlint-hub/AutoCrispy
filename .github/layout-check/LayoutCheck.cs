@@ -4,6 +4,8 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -17,6 +19,58 @@ internal static class LayoutCheck
     private const int OverlapTolerancePixels = 4;
     private static readonly List<string> Errors = new List<string>();
     private static readonly List<string> Warnings = new List<string>();
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    private static extern IntPtr FindWindow(string className, string windowName);
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    private static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int maxCount);
+
+    [DllImport("user32.dll")]
+    private static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    private const uint WmClose = 0x0010;
+
+    // Application code may open modal message boxes (for example settings-load errors).
+    // The checker runs unattended, so it records and closes them instead of hanging.
+    private static void StartDialogDismisser()
+    {
+        Thread thread = new Thread(() =>
+        {
+            while (true)
+            {
+                IntPtr dialog = FindWindow("#32770", null);
+                while (dialog != IntPtr.Zero)
+                {
+                    StringBuilder title = new StringBuilder(256);
+                    GetWindowText(dialog, title, title.Capacity);
+                    lock (Warnings)
+                    {
+                        Warnings.Add("unattended run closed a dialog: \"" + title + "\" (the app showed it during startup)");
+                    }
+                    PostMessage(dialog, WmClose, IntPtr.Zero, IntPtr.Zero);
+                    Thread.Sleep(300);
+                    dialog = FindWindow("#32770", null);
+                }
+                Thread.Sleep(200);
+            }
+        });
+        thread.IsBackground = true;
+        thread.Start();
+    }
+
+    // Fails fast with a readable annotation instead of hanging until the job times out.
+    private static void StartWatchdog()
+    {
+        Thread thread = new Thread(() =>
+        {
+            Thread.Sleep(240000);
+            Console.WriteLine("::error title=Layout::layout checker timed out after 4 minutes; the main form did not finish loading or resizing.");
+            Environment.Exit(1);
+        });
+        thread.IsBackground = true;
+        thread.Start();
+    }
 
     private static readonly Size[] WindowSizes =
     {
@@ -36,6 +90,8 @@ internal static class LayoutCheck
         }
 
         Application.EnableVisualStyles();
+        StartDialogDismisser();
+        StartWatchdog();
         Assembly app = Assembly.LoadFrom(Path.GetFullPath(args[0]));
         Type formType = app.GetType("AutoCrispy.Form1", true);
 
@@ -78,7 +134,7 @@ internal static class LayoutCheck
 
         foreach (string w in Warnings)
         {
-            Console.WriteLine("::warning title=Layout text::" + Escape(w));
+            Console.WriteLine("::warning title=Layout::" + Escape(w));
         }
         foreach (string e in Errors)
         {
