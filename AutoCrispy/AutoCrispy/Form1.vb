@@ -1770,20 +1770,30 @@ Public Class Form1
 
     Private Sub LayoutOpenModelDbControls()
         If PyGroup Is Nothing OrElse PyGroup.ClientSize.Width <= 0 Then Return
+        ' One row: [Model selector ........][Catalog…][Refresh]. All buttons share the
+        ' selector's height and top so nothing is offset, and every size/gap scales with DPI.
+        Dim Scale As Double = Math.Max(1, PyGroup.DeviceDpi) / 96.0
         Dim ClientWidth As Integer = PyGroup.ClientSize.Width
         Dim RightMargin As Integer = Math.Max(5, PyGroup.Padding.Right + 2)
-        Dim ButtonGap As Integer = 7
-        RefreshSpandrelModelsButton.Width = 94
-        RefreshSpandrelModelsButton.Left = ClientWidth - RightMargin - RefreshSpandrelModelsButton.Width
-        BrowseOpenModelDbButton.Width = 112
-        BrowseOpenModelDbButton.Height = 30
-        BrowseOpenModelDbButton.Left = RefreshSpandrelModelsButton.Left - ButtonGap - BrowseOpenModelDbButton.Width
-        BrowseOpenModelDbButton.Top = RefreshSpandrelModelsButton.Top
+        Dim ButtonGap As Integer = CInt(Math.Round(8 * Scale))
+        Dim RefreshWidth As Integer = CInt(Math.Round(94 * Scale))
+        Dim CatalogWidth As Integer = CInt(Math.Round(108 * Scale))
+        Dim RowHeight As Integer = Math.Max(PyModel.Height, CInt(Math.Round(28 * Scale)))
+
+        PyModel.Height = RowHeight
+        RefreshSpandrelModelsButton.Height = RowHeight
+        BrowseOpenModelDbButton.Height = RowHeight
+        RefreshSpandrelModelsButton.Width = RefreshWidth
+        RefreshSpandrelModelsButton.Left = ClientWidth - RightMargin - RefreshWidth
+        RefreshSpandrelModelsButton.Top = PyModel.Top
+        BrowseOpenModelDbButton.Width = CatalogWidth
+        BrowseOpenModelDbButton.Left = RefreshSpandrelModelsButton.Left - ButtonGap - CatalogWidth
+        BrowseOpenModelDbButton.Top = PyModel.Top
 
         Dim IsSpandrelSelected As Boolean = String.Equals(
             If(ExeComboBox.SelectedItem, "").ToString(), SpandrelBackendName, StringComparison.OrdinalIgnoreCase)
         If IsSpandrelSelected Then
-            ' The selector list must not extend beneath the adjacent Catalog/Refresh buttons.
+            ' The selector stops before Catalog; it never extends beneath the buttons.
             PyModel.Width = Math.Max(1, BrowseOpenModelDbButton.Left - PyModel.Left - ButtonGap)
         Else
             PyModel.Width = Math.Max(1, ClientWidth - PyModel.Left - RightMargin)
