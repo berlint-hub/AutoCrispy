@@ -84,4 +84,8 @@ jobs:
       - name: Run scaling probe
         shell: pwsh
         run: |
-          & .\probe.exe
+          $lines = & .\probe.exe
+          $lines | Where-Object { $_ -notmatch '^PROBE\|' } | Write-Host
+          $lines | Where-Object { $_ -match '^PROBE\|' } | Select-Object -First 20 | ForEach-Object {
+            Write-Host "::notice title=WinForms scaling probe::$($_.Substring(6))"
+          }
