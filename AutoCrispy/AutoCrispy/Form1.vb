@@ -21,6 +21,17 @@ Public Class Form1
     Private LastSelectedPainterModelPath As String = ""
     Private IsUpdatingAutoRouteModelSelectors As Boolean = False
     Private IsUpdatingPrecisionSelection As Boolean
+    Private IsResponsiveLayoutReady As Boolean
+    Private IsApplyingResponsiveLayout As Boolean
+    Private ResponsiveTabMinimumWidth As Integer
+    Private ResponsiveTabRightMargin As Integer
+    Private ResponsiveSettingsMinimumHeight As Integer
+    Private ResponsiveSettingsBottomMargin As Integer
+    Private ResponsiveActionBottomMargin As Integer
+    Private ResponsivePanelMinimumWidth As Integer
+    Private ResponsivePanelRightMargin As Integer
+    Private ReadOnly ResponsivePanelMinimumHeights As New Dictionary(Of GroupBox, Integer)
+    Private ReadOnly ResponsivePanelBottomMargins As New Dictionary(Of GroupBox, Integer)
     Private AutoRoutePreviewHasResult As Boolean = False
     Private ReadOnly UiToolTip As New ToolTip()
     Private ReadOnly SpandrelTilingBadge As New System.Windows.Forms.Label()
@@ -205,6 +216,9 @@ Public Class Form1
         Application.CurrentCulture = New Globalization.CultureInfo("EN-US")
         PreloadImageList()
         ChainControl = New DragDropList(ChainPreview, 7)
+        ConfigureResponsiveLayout()
+        ApplyResponsiveLayout()
+        IsResponsiveLayoutReady = True
         Try
             If File.Exists(Root & "\portable.xml") Then
                 FormSettings.LoadSettings(Me, Deserialize(Of FormSettings.Settings)(File.ReadAllText(Root & "\portable.xml")))
@@ -240,6 +254,102 @@ Public Class Form1
         If Environment.GetCommandLineArgs.Count > 1 Then
             WatchDogButton_Click(sender, e)
         End If
+    End Sub
+
+    Private Sub ConfigureResponsiveLayout()
+        Dim InitialClientSize As Size = ClientSize
+        FormBorderStyle = System.Windows.Forms.FormBorderStyle.Sizable
+        MaximizeBox = True
+        ClientSize = InitialClientSize
+        ResponsiveTabMinimumWidth = TabGroup.Width
+        ResponsiveTabRightMargin = ClientSize.Width - TabGroup.Right
+        ResponsiveSettingsMinimumHeight = SettingsGroup.Height
+        ResponsiveSettingsBottomMargin = ClientSize.Height - SettingsGroup.Bottom
+        ResponsiveActionBottomMargin = ClientSize.Height - RunOnceButton.Bottom
+        ResponsivePanelMinimumWidth = PyGroup.Width
+        SettingsLoc = New Point(SettingsGroup.Right + 16, SettingsGroup.Top)
+        ResponsivePanelRightMargin = ClientSize.Width - SettingsLoc.X - ResponsivePanelMinimumWidth
+        ResponsivePanelMinimumHeights.Clear()
+        ResponsivePanelBottomMargins.Clear()
+        For Each Panel As GroupBox In New GroupBox() {CaffeGroup, VulkanGroup, WaifuCPPGroup, AnimeCPPGroup, DDxGroup, xBRZGroup, PyGroup}
+            ResponsivePanelMinimumHeights(Panel) = Panel.Height
+            ResponsivePanelBottomMargins(Panel) = ClientSize.Height - SettingsLoc.Y - Panel.Height
+        Next
+        MinimumSize = Size
+
+        TabGroup.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
+        SettingsGroup.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left
+        RunOnceButton.Anchor = AnchorStyles.Bottom Or AnchorStyles.Left
+        WatchDogButton.Anchor = AnchorStyles.Bottom Or AnchorStyles.Left
+        QueueSummaryLabel.Anchor = AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
+        QueueActivityLabel.Anchor = AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
+        UpscaleProgress.Anchor = AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
+        BackendStatusLabel.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
+
+        InputTextBox.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
+        OutputTextBox.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
+        ExeTextBox.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
+        InputBrowse.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        OutputBrowse.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        ExeBrowse.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        GamePathsSummaryLabel.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
+
+        ChainPreview.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
+        ChainAdd.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        ChainRemove.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        ChainSave.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        ChainLoad.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        ExpertSettingsBox.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
+        SeamsBox.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        SeamScale.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        SeamMargin.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+
+        PyModel.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
+        RefreshSpandrelModelsButton.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        SpandrelModelInfoLabel.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
+        SpandrelScanStatusLabel.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
+        TileSizeHint.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
+        PyPrecisionLabel.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        PyPrecisionComboBox.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        AutoArchitectModelComboBox.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
+        AutoPainterModelComboBox.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
+        AutoRoutePreviewStatusLabel.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
+
+        For Each Panel As GroupBox In New GroupBox() {CaffeGroup, VulkanGroup, WaifuCPPGroup, AnimeCPPGroup, DDxGroup, xBRZGroup, PyGroup}
+            Panel.Anchor = AnchorStyles.Top Or AnchorStyles.Left
+        Next
+    End Sub
+
+    Private Sub ApplyResponsiveLayout()
+        If IsApplyingResponsiveLayout OrElse ClientSize.Width <= 0 OrElse ClientSize.Height <= 0 Then Return
+        IsApplyingResponsiveLayout = True
+        Try
+            Dim ClientWidth As Integer = ClientSize.Width
+            Dim ClientHeight As Integer = ClientSize.Height
+            TabGroup.Width = Math.Max(ResponsiveTabMinimumWidth, ClientWidth - TabGroup.Left - ResponsiveTabRightMargin)
+            SettingsGroup.Height = Math.Max(ResponsiveSettingsMinimumHeight, ClientHeight - SettingsGroup.Top - ResponsiveSettingsBottomMargin)
+            RunOnceButton.Top = ClientHeight - ResponsiveActionBottomMargin - RunOnceButton.Height
+            WatchDogButton.Top = ClientHeight - ResponsiveActionBottomMargin - WatchDogButton.Height
+
+            SettingsLoc = New Point(SettingsGroup.Right + 16, SettingsGroup.Top)
+            Dim PanelWidth As Integer = Math.Max(ResponsivePanelMinimumWidth, ClientWidth - SettingsLoc.X - ResponsivePanelRightMargin)
+            For Each Panel As GroupBox In New GroupBox() {CaffeGroup, VulkanGroup, WaifuCPPGroup, AnimeCPPGroup, DDxGroup, xBRZGroup, PyGroup}
+                Dim MinimumPanelHeight As Integer = ResponsivePanelMinimumHeights(Panel)
+                Dim PanelBottomMargin As Integer = ResponsivePanelBottomMargins(Panel)
+                Panel.Location = SettingsLoc
+                Panel.Size = New Size(PanelWidth, Math.Max(MinimumPanelHeight, ClientHeight - SettingsLoc.Y - PanelBottomMargin))
+            Next
+
+            Dim IsSpandrelSelected As Boolean = String.Equals(If(ExeComboBox.SelectedItem, "").ToString(), SpandrelBackendName, StringComparison.OrdinalIgnoreCase)
+            LayoutSpandrelModelCard(IsSpandrelSelected)
+        Finally
+            IsApplyingResponsiveLayout = False
+        End Try
+    End Sub
+
+    Private Sub Form1_Resize(sender As Object, e As EventArgs) Handles MyBase.Resize
+        If Not IsResponsiveLayoutReady OrElse IsApplyingResponsiveLayout Then Return
+        ApplyResponsiveLayout()
     End Sub
 
     Private Sub Form1_Closing(sender As Object, e As FormClosingEventArgs) Handles MyBase.FormClosing

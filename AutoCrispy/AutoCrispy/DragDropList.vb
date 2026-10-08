@@ -41,6 +41,13 @@ Public Class DragDropList
         End Sub
     End Structure
 
+    Private Sub ListCanvas_Resize(sender As Object, e As EventArgs) Handles ListCanvas.Resize
+        If ListCanvas Is Nothing OrElse ListCanvas.ClientSize.Width <= 0 OrElse ListCanvas.ClientSize.Height <= 0 Then Return
+        ImageWidth = ListCanvas.ClientSize.Width
+        ImageHeight = ListCanvas.ClientSize.Height
+        DrawList(ListItems)
+    End Sub
+
     Private Sub DragTimer_Tick(sender As Object, e As EventArgs) Handles DragTimer.Tick
         If Not IsDragging Then Return
         Dim NewIndex As Integer = GetCurrentIndex()
