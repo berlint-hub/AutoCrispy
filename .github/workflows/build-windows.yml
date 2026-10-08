@@ -35,7 +35,17 @@ jobs:
         uses: microsoft/setup-msbuild@v2
 
       - name: Build Release
-        run: msbuild AutoCrispy\AutoCrispy.sln /t:Rebuild /m /p:Configuration=Release /p:Platform="Any CPU" /verbosity:minimal
+        shell: pwsh
+        run: |
+          $buildOutput = @(& msbuild AutoCrispy\AutoCrispy.sln /t:Rebuild /m /p:Configuration=Release /p:Platform="Any CPU" /verbosity:minimal 2>&1 | ForEach-Object { "$_" })
+          $buildExitCode = $LASTEXITCODE
+          $buildOutput | ForEach-Object { Write-Output $_ }
+          if ($buildExitCode -ne 0) {
+            foreach ($line in $buildOutput | Where-Object { $_ -match '\berror\s+(BC\d+|MSB\d+)' }) {
+              Write-Output "::error::$line"
+            }
+          }
+          exit $buildExitCode
 
       - name: Verify Python helpers were copied
         shell: pwsh
