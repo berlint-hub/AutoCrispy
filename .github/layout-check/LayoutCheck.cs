@@ -190,6 +190,16 @@ internal static class LayoutCheck
         {
             foreach (Control c in group.Controls) if (c.Visible) visibleInGroup++;
         }
+        if (group != null)
+        {
+            StringBuilder dump = new StringBuilder();
+            foreach (Control c in group.Controls)
+            {
+                if (!c.Visible) continue;
+                dump.Append(c.Name + "@" + c.Top + "+" + c.Height + " ");
+            }
+            Warnings.Add("note layout dump @" + scaleLabel + " PyGroup " + group.ClientSize + ": " + dump);
+        }
         Warnings.Add("note @" + scaleLabel + ": backend=" + (exe == null ? "?" : Convert.ToString(exe.SelectedItem)) +
                      " PyModel.Visible=" + (model != null && model.Visible) +
                      " Catalog.Visible=" + (catalog != null && catalog.Visible) +
