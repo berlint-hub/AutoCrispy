@@ -43,6 +43,7 @@ Public Class Form1
     Private ReadOnly InstallSpandrelRuntimeButton As New Button()
     Private ReadOnly SpandrelRuntimeSectionLabel As New Label()
     Private ReadOnly SpandrelRuntimeHintLabel As New Label()
+    Private ReadOnly DependenciesTab As New TabPage("Dependencies")
     Private ReadOnly GamePathProfiles As New BindingList(Of FormSettings.GamePathProfile)
     Private CurrentRunGamePaths As List(Of FormSettings.GamePathProfile)
     Private CurrentRunTempRoot As String = String.Empty
@@ -1868,11 +1869,15 @@ Public Class Form1
     End Sub
 
     Private Sub InitializeSpandrelRuntimeSetupControl()
+        DependenciesTab.UseVisualStyleBackColor = True
+        DependenciesTab.Padding = New Padding(8)
+        TabGroup.TabPages.Add(DependenciesTab)
+
         SpandrelRuntimeSectionLabel.AutoSize = True
         SpandrelRuntimeSectionLabel.Location = New Point(208, 132)
         SpandrelRuntimeSectionLabel.Name = "SpandrelRuntimeSectionLabel"
         SpandrelRuntimeSectionLabel.Text = "Model runtime:"
-        AdvSettingsGroup.Controls.Add(SpandrelRuntimeSectionLabel)
+        DependenciesTab.Controls.Add(SpandrelRuntimeSectionLabel)
 
         InstallSpandrelRuntimeButton.AccessibleName = "Install or repair the Spandrel Python runtime"
         InstallSpandrelRuntimeButton.Location = New Point(322, 124)
@@ -1882,7 +1887,7 @@ Public Class Form1
         InstallSpandrelRuntimeButton.Text = "Install / repair…"
         InstallSpandrelRuntimeButton.UseVisualStyleBackColor = True
         AddHandler InstallSpandrelRuntimeButton.Click, AddressOf InstallSpandrelRuntimeButton_Click
-        AdvSettingsGroup.Controls.Add(InstallSpandrelRuntimeButton)
+        DependenciesTab.Controls.Add(InstallSpandrelRuntimeButton)
 
         SpandrelRuntimeHintLabel.AutoEllipsis = True
         SpandrelRuntimeHintLabel.Location = New Point(208, 160)
@@ -1890,7 +1895,7 @@ Public Class Form1
         SpandrelRuntimeHintLabel.Size = New Size(356, 20)
         SpandrelRuntimeHintLabel.Text = "Python 3.10+ · PyTorch / TorchVision · Spandrel"
         SpandrelRuntimeHintLabel.ForeColor = SystemColors.GrayText
-        AdvSettingsGroup.Controls.Add(SpandrelRuntimeHintLabel)
+        DependenciesTab.Controls.Add(SpandrelRuntimeHintLabel)
 
         UiToolTip.SetToolTip(InstallSpandrelRuntimeButton,
             "Check the Python AutoCrispy will use, then install or repair Spandrel, PyTorch, TorchVision, NumPy and Pillow.")
@@ -1900,12 +1905,12 @@ Public Class Form1
     End Sub
 
     Private Sub LayoutSpandrelRuntimeSetupControl()
-        Dim DpiScale As Double = Math.Max(1, AdvSettingsGroup.DeviceDpi) / 96.0
-        SpandrelRuntimeSectionLabel.Location = New Point(CInt(Math.Round(208 * DpiScale)), CInt(Math.Round(132 * DpiScale)))
-        InstallSpandrelRuntimeButton.Location = New Point(CInt(Math.Round(322 * DpiScale)), CInt(Math.Round(124 * DpiScale)))
+        Dim DpiScale As Double = Math.Max(1, DependenciesTab.DeviceDpi) / 96.0
+        SpandrelRuntimeSectionLabel.Location = New Point(CInt(Math.Round(16 * DpiScale)), CInt(Math.Round(16 * DpiScale)))
+        InstallSpandrelRuntimeButton.Location = New Point(CInt(Math.Round(16 * DpiScale)), CInt(Math.Round(44 * DpiScale)))
         InstallSpandrelRuntimeButton.Size = New Size(CInt(Math.Round(196 * DpiScale)), CInt(Math.Round(32 * DpiScale)))
-        SpandrelRuntimeHintLabel.Location = New Point(CInt(Math.Round(208 * DpiScale)), CInt(Math.Round(160 * DpiScale)))
-        SpandrelRuntimeHintLabel.Size = New Size(CInt(Math.Round(356 * DpiScale)), CInt(Math.Round(20 * DpiScale)))
+        SpandrelRuntimeHintLabel.Location = New Point(CInt(Math.Round(16 * DpiScale)), CInt(Math.Round(88 * DpiScale)))
+        SpandrelRuntimeHintLabel.Size = New Size(CInt(Math.Round(560 * DpiScale)), CInt(Math.Round(20 * DpiScale)))
     End Sub
 
     Private Async Sub InstallSpandrelRuntimeButton_Click(sender As Object, e As EventArgs)
