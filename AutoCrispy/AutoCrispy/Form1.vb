@@ -39,6 +39,7 @@ Public Class Form1
     Private ReadOnly UiToolTip As New ToolTip()
     Private ReadOnly SpandrelTilingBadge As New System.Windows.Forms.Label()
     Private ReadOnly BrowseOpenModelDbButton As New Button()
+    Private ReadOnly ChainInstructionsLabel As New Label()
     Private ReadOnly GamePathProfiles As New BindingList(Of FormSettings.GamePathProfile)
     Private CurrentRunGamePaths As List(Of FormSettings.GamePathProfile)
     Private CurrentRunTempRoot As String = String.Empty
@@ -229,9 +230,12 @@ Public Class Form1
     Private Async Sub Form1_Load(sender As Object, e As EventArgs) Handles MyBase.Load
         Me.SetStyle(ControlStyles.OptimizedDoubleBuffer, True)
         InitializeSpandrelModelCard()
+        InitializeChainFriendlyUI()
         Application.CurrentCulture = New Globalization.CultureInfo("EN-US")
         PreloadImageList()
         ChainControl = New DragDropList(ChainPreview, 7)
+        AddHandler ChainControl.SelectionChanged, AddressOf ChainSelectionChanged
+        AddHandler ChainControl.ItemsReordered, AddressOf ChainItemsReordered
         ConfigureResponsiveLayout()
         ApplyResponsiveLayout()
         IsResponsiveLayoutReady = True
@@ -264,6 +268,7 @@ Public Class Form1
         End If
         Await RefreshSupportedSpandrelModels(Root)
         ChainControl.DrawList(ChainControl.ListItems)
+        UpdateChainAddButtonState()
         WatchDogButton.Select()
         ' Show the current input/output completion immediately, then keep it refreshed.
         ProgressPollTimer.Enabled = True
@@ -1068,6 +1073,51 @@ Public Class Form1
 
 #Region "UI"
 
+    Private Sub InitializeChainFriendlyUI()
+        ChainGroup.Text = "Processing chain"
+        ChainInstructionsLabel.Name = "ChainInstructionsLabel"
+        ChainInstructionsLabel.AccessibleName = "Processing chain instructions"
+        ChainInstructionsLabel.AccessibleDescription = "Set up a backend, add processing steps, then run them in order."
+        ChainInstructionsLabel.AutoEllipsis = True
+        ChainInstructionsLabel.Location = New Point(ChainPreview.Left, 7)
+        ChainInstructionsLabel.Size = New Size(ChainPreview.Width, 34)
+        ChainInstructionsLabel.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
+        ChainInstructionsLabel.TextAlign = ContentAlignment.MiddleLeft
+        ChainInstructionsLabel.ForeColor = System.Drawing.Color.FromArgb(72, 82, 94)
+        ChainInstructionsLabel.Text = "Choose a backend and its settings in the main panel, then click Add step." & Environment.NewLine &
+            "The numbered steps run in order. Drag to reorder; right-click for more options."
+        ChainGroup.Controls.Add(ChainInstructionsLabel)
+        ChainInstructionsLabel.BringToFront()
+
+        Dim PreviewBottomMargin As Integer = Math.Max(7, ChainGroup.ClientSize.Height - ChainPreview.Bottom)
+        ChainPreview.Top = ChainInstructionsLabel.Bottom + 4
+        ChainPreview.Height = Math.Max(90, ChainGroup.ClientSize.Height - ChainPreview.Top - PreviewBottomMargin)
+
+        Dim ButtonWidth As Integer = 112
+        Dim ButtonGap As Integer = 10
+        Dim RightMargin As Integer = 12
+        Dim ButtonLeft As Integer = ChainGroup.ClientSize.Width - RightMargin - ButtonWidth
+        For Each ChainButton As Button In New Button() {ChainAdd, ChainRemove, ChainSave, ChainLoad}
+            ChainButton.Width = ButtonWidth
+            ChainButton.Left = ButtonLeft
+            ChainButton.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        Next
+        ChainPreview.Width = Math.Max(180, ButtonLeft - ButtonGap - ChainPreview.Left)
+        ChainInstructionsLabel.Width = ChainPreview.Width
+
+        ChainAdd.Text = "Add step"
+        ChainRemove.Text = "Remove step"
+        ChainRemove.Enabled = False
+        ChainSave.Text = "Save chain"
+        ChainLoad.Text = "Load chain"
+        ChainContextEdit.Text = "Advanced: edit XML…"
+        ChainContextDelete.Text = "Remove step"
+        UiToolTip.SetToolTip(ChainAdd, "Add the selected backend and its current settings as the next processing step.")
+        UiToolTip.SetToolTip(ChainRemove, "Click a numbered step first, then remove it from the chain.")
+        UiToolTip.SetToolTip(ChainSave, "Save this processing chain to a file.")
+        UiToolTip.SetToolTip(ChainLoad, "Replace the current chain with a saved chain.")
+    End Sub
+
     Private Sub ExeComboBox_SelectedIndexChanged(sender As Object, e As EventArgs) Handles ExeComboBox.SelectedIndexChanged
         SetSettingsWindow()
     End Sub
@@ -1107,26 +1157,67 @@ Public Class Form1
     End Sub
 
     Private Sub ChainSave_Click(sender As Object, e As EventArgs) Handles ChainSave.Click
-        Using SFD As New SaveFileDialog With {.Filter = "XML Files|*.xml|All Files|*.*"}
-            If SFD.ShowDialog = DialogResult.OK Then
+        If ChainList Is Nothing OrElse ChainList.Count = 0 Then Return
+        Using SFD As New SaveFileDialog With {
+            .Filter = "AutoCrispy chain (*.xml)|*.xml|All files (*.*)|*.*",
+            .Title = "Save processing chain",
+            .DefaultExt = "xml",
+            .AddExtension = True,
+            .FileName = "AutoCrispy chain.xml"
+        }
+            If SFD.ShowDialog(Me) <> DialogResult.OK Then Return
+            Try
                 File.WriteAllText(SFD.FileName, Serialize(ChainList))
-            End If
+                ChainInstructionsLabel.Text = "Saved " & ChainList.Count.ToString() & " processing step(s) to " & Path.GetFileName(SFD.FileName) & "."
+            Catch ex As Exception
+                MessageBox.Show(Me, "The chain could not be saved: " & ex.GetBaseException().Message,
+                                "Save chain failed", MessageBoxButtons.OK, MessageBoxIcon.Error)
+            End Try
         End Using
     End Sub
 
     Private Sub ChainLoad_Click(sender As Object, e As EventArgs) Handles ChainLoad.Click
-        Using OFD As New OpenFileDialog With {.Filter = "XML Files|*.xml|All Files|*.*"}
-            If OFD.ShowDialog = DialogResult.OK Then
-                ChainControl.ListItems.Clear()
-                ChainList.Clear()
-                ChainList = Deserialize(Of List(Of FormSettings.ChainObject))(File.ReadAllText(OFD.FileName))
-                For Each ChainItem As FormSettings.ChainObject In ChainList
-                    ChainControl.ListItems.Add(New DragDropList.DragDropItem(ChainList.IndexOf(ChainItem), ChainItem.Name, ChainThumbs.Item(ChainItem.IconIndex)))
+        Using OFD As New OpenFileDialog With {
+            .Filter = "AutoCrispy chain (*.xml)|*.xml|All files (*.*)|*.*",
+            .Title = "Load processing chain",
+            .CheckFileExists = True
+        }
+            If OFD.ShowDialog(Me) <> DialogResult.OK Then Return
+            Try
+                Dim LoadedChain As List(Of FormSettings.ChainObject) =
+                    Deserialize(Of List(Of FormSettings.ChainObject))(File.ReadAllText(OFD.FileName))
+                If LoadedChain Is Nothing Then Throw New InvalidDataException("The selected file does not contain a processing chain.")
+                For i As Integer = 0 To LoadedChain.Count - 1
+                    Dim ChainItem As FormSettings.ChainObject = LoadedChain(i)
+                    If ChainItem.IconIndex < 0 OrElse ChainItem.IconIndex >= ChainThumbs.Count Then
+                        Throw New InvalidDataException("Step " & (i + 1).ToString() & " has an unsupported icon index.")
+                    End If
+                    If String.IsNullOrWhiteSpace(ChainItem.Name) Then
+                        ChainItem.Name = If(String.IsNullOrWhiteSpace(ChainItem.PackageType), "Processing step", ChainItem.PackageType)
+                        LoadedChain(i) = ChainItem
+                    End If
                 Next
+
+                If ChainList IsNot Nothing AndAlso ChainList.Count > 0 AndAlso
+                    MessageBox.Show(Me, "Replace the current " & ChainList.Count.ToString() & "-step chain with " &
+                                    LoadedChain.Count.ToString() & " step(s) from " & Path.GetFileName(OFD.FileName) & "?",
+                                    "Replace current chain?", MessageBoxButtons.YesNo, MessageBoxIcon.Question) <> DialogResult.Yes Then Return
+
+                ChainList = LoadedChain
+                ChainControl.ListItems.Clear()
+                For i As Integer = 0 To ChainList.Count - 1
+                    Dim ChainItem As FormSettings.ChainObject = ChainList(i)
+                    ChainControl.ListItems.Add(New DragDropList.DragDropItem(i, ChainItem.Name, ChainThumbs(ChainItem.IconIndex)))
+                Next
+                ChainControl.ClearSelection()
                 If GetPreferredSpandrelBackendIndex() >= 0 Then ReplaceLegacyUpscalerChain()
                 ChainControl.DrawList(ChainControl.ListItems)
                 UpdateChainAddButtonState()
-            End If
+            Catch ex As Exception
+                MessageBox.Show(Me, "The chain could not be loaded. Your current chain was left unchanged." &
+                                Environment.NewLine & ex.GetBaseException().Message,
+                                "Load chain failed", MessageBoxButtons.OK, MessageBoxIcon.Error)
+            End Try
         End Using
     End Sub
 
@@ -1138,14 +1229,35 @@ Public Class Form1
         Return -1
     End Function
 
+    Private Sub ChainSelectionChanged(sender As Object, e As EventArgs)
+        UpdateChainAddButtonState()
+    End Sub
+
     Private Sub UpdateChainAddButtonState()
+        If ChainList Is Nothing Then ChainList = New List(Of FormSettings.ChainObject)
         Dim IsSpandrelSelected As Boolean = String.Equals(If(ExeComboBox.SelectedItem, "").ToString(), SpandrelBackendName, StringComparison.OrdinalIgnoreCase)
-        If IsSpandrelSelected AndAlso FindLatestSpandrelChainItemIndex() >= 0 Then
-            ChainAdd.Text = "Update"
-            UiToolTip.SetToolTip(ChainAdd, "Update the latest Spandrel chain step with the selected model and settings. Shift-click to append another Spandrel step.")
+        Dim ExistingSpandrelIndex As Integer = FindLatestSpandrelChainItemIndex()
+        If IsSpandrelSelected AndAlso ExistingSpandrelIndex >= 0 Then
+            ChainAdd.Text = "Update step"
+            UiToolTip.SetToolTip(ChainAdd,
+                "Update the latest Spandrel step with these settings. Hold Shift while clicking to append another Spandrel step.")
         Else
-            ChainAdd.Text = "Add"
-            UiToolTip.SetToolTip(ChainAdd, "Add the selected backend as a new step in the chain.")
+            ChainAdd.Text = "Add step"
+            UiToolTip.SetToolTip(ChainAdd, "Add the selected backend and its current settings as the next processing step.")
+        End If
+
+        Dim SelectedIndex As Integer = If(ChainControl Is Nothing, -1, ChainControl.SelectedIndex)
+        ChainRemove.Enabled = SelectedIndex >= 0 AndAlso SelectedIndex < ChainList.Count
+        ChainSave.Enabled = ChainList.Count > 0
+        If ChainList.Count = 0 Then
+            ChainInstructionsLabel.Text = "Choose a backend and its settings in the main panel, then click Add step." & Environment.NewLine &
+                "The selected backend runs by itself if you leave the chain empty."
+        ElseIf IsSpandrelSelected AndAlso ExistingSpandrelIndex >= 0 Then
+            ChainInstructionsLabel.Text = "Click Update step to refresh the latest Spandrel stage. Steps run in order; drag to reorder." & Environment.NewLine &
+                "Hold Shift while clicking Update step to append another Spandrel stage. Right-click for advanced options."
+        Else
+            ChainInstructionsLabel.Text = "Click Add step to append the selected backend and settings. Steps run in order; drag to reorder." & Environment.NewLine &
+                "Click a numbered step and choose Remove step, or right-click it for advanced XML options."
         End If
     End Sub
 
@@ -1155,39 +1267,74 @@ Public Class Form1
         UpdateChainAddButtonState()
     End Sub
 
-    Private Sub RemoveItemFromChain(sender As Object, e As EventArgs) Handles ChainContextDelete.Click
-        Dim Remove As Integer = ChainControl.GetCurrentIndex
+    Private Sub ChainContext_Opening(sender As Object, e As CancelEventArgs) Handles ChainContext.Opening
+        Dim SelectedIndex As Integer = If(ChainControl Is Nothing, -1, ChainControl.SelectedIndex)
+        Dim ChainCount As Integer = If(ChainList Is Nothing, 0, ChainList.Count)
+        Dim HasSelectedStep As Boolean = SelectedIndex >= 0 AndAlso SelectedIndex < ChainCount
+        ChainContextEdit.Enabled = HasSelectedStep
+        ChainContextDelete.Enabled = HasSelectedStep
+        e.Cancel = Not HasSelectedStep
+    End Sub
+
+    Private Sub RemoveItemFromChain(sender As Object, e As EventArgs) Handles ChainContextDelete.Click, ChainRemove.Click
+        If ChainControl Is Nothing Then Return
+        Dim Remove As Integer = ChainControl.SelectedIndex
+        If Remove < 0 OrElse Remove >= ChainList.Count Then Return
+        Dim StepName As String = If(String.IsNullOrWhiteSpace(ChainList(Remove).Name), "this step", ChainList(Remove).Name)
+        If MessageBox.Show(Me, "Remove " & StepName & " from the processing chain?", "Remove chain step",
+                           MessageBoxButtons.YesNo, MessageBoxIcon.Question) <> DialogResult.Yes Then Return
+
         ChainList.RemoveAt(Remove)
         ChainControl.ListItems.RemoveAt(Remove)
         ChainControl.ReorderList()
+        ChainControl.ClearSelection()
         ChainControl.DrawList(ChainControl.ListItems)
         UpdateChainAddButtonState()
     End Sub
 
     Private Sub ChainContextEdit_Click(sender As Object, e As EventArgs) Handles ChainContextEdit.Click
-        Dim ItemIndex As Integer = ChainControl.GetCurrentIndex
-        Using ECD As New EditChainDialog(Serialize(ChainList(ItemIndex)))
-            If ECD.ShowDialog = DialogResult.OK Then
-                Try
+        If ChainControl Is Nothing Then Return
+        Dim ItemIndex As Integer = ChainControl.SelectedIndex
+        If ItemIndex < 0 OrElse ItemIndex >= ChainList.Count Then Return
+        Dim StepName As String = If(String.IsNullOrWhiteSpace(ChainList(ItemIndex).Name), "this step", ChainList(ItemIndex).Name)
+        Dim AdvancedWarning As String = "This opens the advanced raw-XML editor for " & StepName & "." & Environment.NewLine &
+            "Most changes can be made in the main settings panel; only continue if you intend to edit XML."
+        If MessageBox.Show(Me, AdvancedWarning, "Advanced chain editor", MessageBoxButtons.OKCancel,
+                           MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) <> DialogResult.OK Then Return
+
+        Try
+            Using ECD As New EditChainDialog(Serialize(ChainList(ItemIndex)))
+                If ECD.ShowDialog(Me) = DialogResult.OK Then
                     Dim NewChainItem As FormSettings.ChainObject = Deserialize(Of FormSettings.ChainObject)(ECD.ResultText)
+                    If NewChainItem.IconIndex < 0 OrElse NewChainItem.IconIndex >= ChainThumbs.Count Then
+                        Throw New InvalidDataException("The icon index is outside the supported range.")
+                    End If
                     ChainList(ItemIndex) = NewChainItem
-                Catch ex As Exception
-                    MsgBox("Error: New settings could not be parsed.")
-                End Try
-            End If
-        End Using
+                    ChainControl.ListItems(ItemIndex) = New DragDropList.DragDropItem(
+                        ItemIndex, NewChainItem.Name, ChainThumbs(NewChainItem.IconIndex))
+                    ChainControl.DrawList(ChainControl.ListItems)
+                End If
+            End Using
+        Catch ex As Exception
+            MessageBox.Show(Me, "The chain step could not be updated: " & ex.GetBaseException().Message,
+                            "Invalid chain settings", MessageBoxButtons.OK, MessageBoxIcon.Error)
+        End Try
+        UpdateChainAddButtonState()
+    End Sub
+
+    Private Sub ChainItemsReordered(sender As Object, e As EventArgs)
+        If ChainControl Is Nothing OrElse ChainList Is Nothing Then Return
+        Dim ReorderedChain As New List(Of FormSettings.ChainObject)
+        For Each Item As DragDropList.DragDropItem In ChainControl.ListItems
+            If Item.Index < 0 OrElse Item.Index >= ChainList.Count Then Return
+            ReorderedChain.Add(ChainList(Item.Index))
+        Next
+        If ReorderedChain.Count = ChainList.Count Then ChainList = ReorderedChain
         UpdateChainAddButtonState()
     End Sub
 
     Private Sub ChainPreview_MouseUp(sender As Object, e As MouseEventArgs) Handles ChainPreview.MouseUp
-        If e.Button = MouseButtons.Left Then
-            Dim TempList As New List(Of FormSettings.ChainObject)
-            For Each Item As DragDropList.DragDropItem In ChainControl.ListItems
-                TempList.Add(ChainList(Item.Index))
-            Next
-            ChainList = TempList
-            ChainControl.ReorderList()
-        End If
+        UpdateChainAddButtonState()
     End Sub
 
     Private Sub ChainPreview_MouseMove(sender As Object, e As MouseEventArgs) Handles ChainPreview.MouseMove
@@ -3636,7 +3783,17 @@ Public Class Form1
                     ChainList.Add(UpdatedChainItem)
                 End If
         End Select
-        ChainControl.DrawList(ChainControl.ListItems)
+        If ChainControl.ListItems.Count > 0 Then
+            Dim FocusIndex As Integer = ChainControl.ListItems.Count - 1
+            If String.Equals(Mode, SpandrelBackendName, StringComparison.OrdinalIgnoreCase) AndAlso Not ForceAppend Then
+                Dim ExistingSpandrelIndex As Integer = FindLatestSpandrelChainItemIndex()
+                If ExistingSpandrelIndex >= 0 Then FocusIndex = ExistingSpandrelIndex
+            End If
+            ChainControl.SelectIndex(FocusIndex)
+        Else
+            ChainControl.DrawList(ChainControl.ListItems)
+        End If
+        UpdateChainAddButtonState()
     End Sub
 
 #End Region

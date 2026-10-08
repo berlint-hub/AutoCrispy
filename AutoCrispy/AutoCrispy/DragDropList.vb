@@ -1,4 +1,4 @@
-﻿
+
 Public Class DragDropList
 
     Private ListImage As Bitmap
@@ -15,9 +15,19 @@ Public Class DragDropList
     Private Const ItemPadding As Integer = 10
     Private Const CaptionHeight As Integer = 24
 
-    Private ClickedIndex As Integer
-    Private CurrentIndex As Integer
+    Private ClickedIndex As Integer = -1
+    Private CurrentIndex As Integer = -1
     Private IsDragging As Boolean
+    Private DidReorder As Boolean
+
+    Public Event SelectionChanged As EventHandler
+    Public Event ItemsReordered As EventHandler
+
+    Public ReadOnly Property SelectedIndex As Integer
+        Get
+            Return ClickedIndex
+        End Get
+    End Property
 
     Private WithEvents DragTimer As New Timer With {.Interval = 100, .Enabled = False}
 
@@ -51,12 +61,12 @@ Public Class DragDropList
     Private Sub DragTimer_Tick(sender As Object, e As EventArgs) Handles DragTimer.Tick
         If Not IsDragging Then Return
         Dim NewIndex As Integer = GetCurrentIndex()
-        If CurrentIndex <> NewIndex Then
-            TempListItems.RemoveAt(CurrentIndex)
-            TempListItems.Insert(NewIndex, ListItems(ClickedIndex))
-            CurrentIndex = NewIndex
-            DrawList(TempListItems)
-        End If
+        If NewIndex < 0 OrElse NewIndex >= TempListItems.Count OrElse CurrentIndex = NewIndex Then Return
+        TempListItems.RemoveAt(CurrentIndex)
+        TempListItems.Insert(NewIndex, ListItems(ClickedIndex))
+        CurrentIndex = NewIndex
+        DidReorder = True
+        DrawList(TempListItems)
     End Sub
 
     Public Sub ListCanvas_MouseDown(sender As Object, e As MouseEventArgs) Handles ListCanvas.MouseDown
@@ -64,25 +74,67 @@ Public Class DragDropList
         If HitIndex >= 0 Then
             ClickedIndex = HitIndex
             CurrentIndex = HitIndex
+        ElseIf e.Button = MouseButtons.Left OrElse e.Button = MouseButtons.Right Then
+            ClickedIndex = -1
+            CurrentIndex = -1
         End If
+
         If e.Button = MouseButtons.Left AndAlso HitIndex >= 0 Then
             TempListItems.Clear()
             TempListItems.AddRange(ListItems)
             Form1.Cursor = Cursors.SizeAll
             IsDragging = True
+            DidReorder = False
             DragTimer.Enabled = True
         End If
+        DrawList(ListItems)
+        RaiseEvent SelectionChanged(Me, EventArgs.Empty)
     End Sub
 
     Public Sub ListCanvas_MouseUp(sender As Object, e As MouseEventArgs) Handles ListCanvas.MouseUp
         If e.Button = MouseButtons.Left AndAlso IsDragging Then
+            Dim ReleaseIndex As Integer = HitTestIndex(e.Location)
+            If ReleaseIndex >= 0 AndAlso ReleaseIndex < TempListItems.Count AndAlso ReleaseIndex <> CurrentIndex Then
+                TempListItems.RemoveAt(CurrentIndex)
+                TempListItems.Insert(ReleaseIndex, ListItems(ClickedIndex))
+                CurrentIndex = ReleaseIndex
+                DidReorder = True
+            End If
+
             DragTimer.Enabled = False
             IsDragging = False
             Form1.Cursor = Cursors.Default
             ListItems.Clear()
             ListItems.AddRange(TempListItems)
+            ClickedIndex = CurrentIndex
+            If DidReorder Then RaiseEvent ItemsReordered(Me, EventArgs.Empty)
             ReorderList()
+            DidReorder = False
         End If
+        DrawList(ListItems)
+        RaiseEvent SelectionChanged(Me, EventArgs.Empty)
+    End Sub
+
+    Public Sub ClearSelection()
+        ClickedIndex = -1
+        CurrentIndex = -1
+        IsDragging = False
+        DidReorder = False
+        DrawList(ListItems)
+        RaiseEvent SelectionChanged(Me, EventArgs.Empty)
+    End Sub
+
+    Public Sub SelectIndex(Index As Integer)
+        If Index < 0 OrElse Index >= ListItems.Count Then
+            ClearSelection()
+            Return
+        End If
+        ClickedIndex = Index
+        CurrentIndex = Index
+        IsDragging = False
+        DidReorder = False
+        DrawList(ListItems)
+        RaiseEvent SelectionChanged(Me, EventArgs.Empty)
     End Sub
 
     Public Sub ReorderList()
@@ -151,29 +203,76 @@ Public Class DragDropList
             Gr.InterpolationMode = Drawing2D.InterpolationMode.HighQualityBicubic
             Gr.TextRenderingHint = Drawing.Text.TextRenderingHint.AntiAliasGridFit
             Gr.FillRectangle(Brushes.White, 0, 0, ImageWidth, ImageHeight)
-            Using ItemFont As New Font("Segoe UI", 12.0!, FontStyle.Regular, GraphicsUnit.Pixel)
-                Using CaptionFormat As New StringFormat With {
-                    .LineAlignment = StringAlignment.Center,
-                    .Alignment = StringAlignment.Center,
-                    .Trimming = StringTrimming.EllipsisCharacter,
-                    .FormatFlags = StringFormatFlags.NoWrap
-                }
-                    For ItemIndex As Integer = 0 To ItemList.Count - 1
-                        Dim BaseX As Integer = ItemIndex Mod ColumnsPerRow
-                        Dim BaseY As Integer = ItemIndex \ ColumnsPerRow
-                        Dim ItemsInRow As Integer = Math.Min(ColumnsPerRow, ItemList.Count - (BaseY * ColumnsPerRow))
-                        Dim RowWidth As Integer = (ItemsInRow * ThumbSize) + ((ItemsInRow - 1) * ItemPadding)
-                        Dim RowStartX As Integer = CInt(Math.Floor((ImageWidth - RowWidth) / 2.0))
-                        Dim RealX As Integer = RowStartX + ((ThumbSize + ItemPadding) * BaseX)
-                        Dim RealY As Integer = ItemPadding + ((ThumbSize + CaptionHeight + ItemPadding) * BaseY)
-                        Gr.DrawImage(ItemList(ItemIndex).Thumbnail, RealX, RealY, ThumbSize, ThumbSize)
-                        Dim CaptionBounds As New RectangleF(RealX, RealY + ThumbSize + 2, ThumbSize, CaptionHeight)
-                        Gr.DrawString(ItemList(ItemIndex).Name, ItemFont, Brushes.Black, CaptionBounds, CaptionFormat)
-                    Next
-                End Using
-            End Using
-        End Using
 
+            If ItemList.Count = 0 Then
+                Using EmptyTitleFont As New Font("Segoe UI", 14.0!, FontStyle.Bold, GraphicsUnit.Pixel)
+                    Using EmptyBodyFont As New Font("Segoe UI", 12.0!, FontStyle.Regular, GraphicsUnit.Pixel)
+                        Using CenterFormat As New StringFormat With {
+                            .Alignment = StringAlignment.Center,
+                            .LineAlignment = StringAlignment.Center,
+                            .FormatFlags = StringFormatFlags.NoWrap
+                        }
+                            Gr.DrawString("No extra steps yet", EmptyTitleFont, Brushes.SlateGray,
+                                New RectangleF(0, (ImageHeight \ 2) - 24, ImageWidth, 28), CenterFormat)
+                            Gr.DrawString("The selected backend runs by itself. Add steps to chain multiple backends.",
+                                EmptyBodyFont, Brushes.DimGray,
+                                New RectangleF(8, (ImageHeight \ 2) + 5, ImageWidth - 16, 26), CenterFormat)
+                        End Using
+                    End Using
+                End Using
+            Else
+                Using ItemFont As New Font("Segoe UI", 12.0!, FontStyle.Regular, GraphicsUnit.Pixel)
+                    Using StepFont As New Font("Segoe UI", 12.0!, FontStyle.Bold, GraphicsUnit.Pixel)
+                        Using CaptionFormat As New StringFormat With {
+                            .LineAlignment = StringAlignment.Center,
+                            .Alignment = StringAlignment.Center,
+                            .Trimming = StringTrimming.EllipsisCharacter,
+                            .FormatFlags = StringFormatFlags.NoWrap
+                        }
+                            Using BadgeFormat As New StringFormat With {
+                                .LineAlignment = StringAlignment.Center,
+                                .Alignment = StringAlignment.Center,
+                                .FormatFlags = StringFormatFlags.NoWrap
+                            }
+                                Using SelectionBrush As New SolidBrush(Color.FromArgb(226, 239, 255))
+                                    Using SelectionPen As New Pen(Color.FromArgb(43, 113, 178), 2.0!)
+                                        Using NormalPen As New Pen(Color.FromArgb(190, 198, 207), 1.0!)
+                                            Using BadgeBrush As New SolidBrush(Color.FromArgb(43, 113, 178))
+                                                Dim HighlightedIndex As Integer = If(IsDragging, CurrentIndex, ClickedIndex)
+                                                For ItemIndex As Integer = 0 To ItemList.Count - 1
+                                                    Dim BaseX As Integer = ItemIndex Mod ColumnsPerRow
+                                                    Dim BaseY As Integer = ItemIndex \ ColumnsPerRow
+                                                    Dim ItemsInRow As Integer = Math.Min(ColumnsPerRow, ItemList.Count - (BaseY * ColumnsPerRow))
+                                                    Dim RowWidth As Integer = (ItemsInRow * ThumbSize) + ((ItemsInRow - 1) * ItemPadding)
+                                                    Dim RowStartX As Integer = CInt(Math.Floor((ImageWidth - RowWidth) / 2.0))
+                                                    Dim RealX As Integer = RowStartX + ((ThumbSize + ItemPadding) * BaseX)
+                                                    Dim RealY As Integer = ItemPadding + ((ThumbSize + CaptionHeight + ItemPadding) * BaseY)
+                                                    Dim IsSelected As Boolean = ItemIndex = HighlightedIndex
+                                                    Dim CardBounds As New Rectangle(RealX - 3, RealY - 3,
+                                                        ThumbSize + 6, ThumbSize + CaptionHeight + 8)
+                                                    If IsSelected Then Gr.FillRectangle(SelectionBrush, CardBounds)
+                                                    Gr.DrawImage(ItemList(ItemIndex).Thumbnail, RealX, RealY, ThumbSize, ThumbSize)
+                                                    Dim ThumbBounds As New Rectangle(RealX, RealY, Math.Max(1, ThumbSize - 1), Math.Max(1, ThumbSize - 1))
+                                                    Gr.DrawRectangle(If(IsSelected, SelectionPen, NormalPen), ThumbBounds)
+
+                                                    Dim BadgeSize As Integer = Math.Min(26, Math.Max(18, ThumbSize \ 5))
+                                                    Dim BadgeBounds As New Rectangle(RealX + 4, RealY + 4, BadgeSize, BadgeSize)
+                                                    Gr.FillEllipse(BadgeBrush, BadgeBounds)
+                                                    Gr.DrawString((ItemIndex + 1).ToString(), StepFont, Brushes.White, BadgeBounds, BadgeFormat)
+
+                                                    Dim CaptionBounds As New RectangleF(RealX, RealY + ThumbSize + 2, ThumbSize, CaptionHeight)
+                                                    Gr.DrawString(ItemList(ItemIndex).Name, ItemFont, Brushes.Black, CaptionBounds, CaptionFormat)
+                                                Next
+                                            End Using
+                                        End Using
+                                    End Using
+                                End Using
+                            End Using
+                        End Using
+                    End Using
+                End Using
+            End If
+        End Using
         ListCanvas.BackgroundImage = ListImage
         ListCanvas.Refresh()
         If PreviousListImage IsNot Nothing Then PreviousListImage.Dispose()
