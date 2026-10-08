@@ -1786,12 +1786,13 @@ Public Class Form1
         Dim Rows As Control()() = {
             New Control() {SpandrelModelInfoLabel},
             New Control() {SpandrelScanStatusLabel},
-            New Control() {Label25, PyTileSize, PyCPU, PyPrecisionLabel, PyPrecisionComboBox},
+            New Control() {Label25, PyTileSize, PyCPU},
             New Control() {TileSizeHint},
             New Control() {PyNormalMapModeLabel, PyNormalMapModeComboBox}
         }
 
-        Dim InCard As New HashSet(Of Control)
+        ' Precision is placed by LayoutSpandrelResponsiveControls (it can share the Normal map row).
+        Dim InCard As New HashSet(Of Control) From {PyPrecisionLabel, PyPrecisionComboBox}
         Dim Cursor As Integer = PyModel.Bottom + Gap
         Dim CardBottom As Integer = Cursor
         For Each Row As Control() In Rows
