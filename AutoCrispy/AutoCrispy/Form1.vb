@@ -321,11 +321,13 @@ Public Class Form1
         SeamScale.Anchor = AnchorStyles.Top Or AnchorStyles.Right
         SeamMargin.Anchor = AnchorStyles.Top Or AnchorStyles.Right
 
-        PyModel.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
+        ' The model selector and its adjacent Spandrel buttons are positioned together below.
+        ' Avoid right-anchor auto-expansion, which can make the selector overlap those buttons.
+        PyModel.Anchor = AnchorStyles.Top Or AnchorStyles.Left
         PyNormalMapModeLabel.Anchor = AnchorStyles.Top Or AnchorStyles.Left
         PyNormalMapModeComboBox.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
-        RefreshSpandrelModelsButton.Anchor = AnchorStyles.Top Or AnchorStyles.Right
-        BrowseOpenModelDbButton.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        RefreshSpandrelModelsButton.Anchor = AnchorStyles.Top Or AnchorStyles.Left
+        BrowseOpenModelDbButton.Anchor = AnchorStyles.Top Or AnchorStyles.Left
         SpandrelModelInfoLabel.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
         SpandrelScanStatusLabel.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
         TileSizeHint.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
@@ -1584,10 +1586,12 @@ Public Class Form1
         Dim IsSpandrelSelected As Boolean = String.Equals(
             If(ExeComboBox.SelectedItem, "").ToString(), SpandrelBackendName, StringComparison.OrdinalIgnoreCase)
         If IsSpandrelSelected Then
-            PyModel.Width = Math.Max(160, BrowseOpenModelDbButton.Left - PyModel.Left - ButtonGap)
+            ' The selector list must not extend beneath the adjacent Catalog/Refresh buttons.
+            PyModel.Width = Math.Max(1, BrowseOpenModelDbButton.Left - PyModel.Left - ButtonGap)
         Else
-            PyModel.Width = Math.Max(160, ClientWidth - PyModel.Left - RightMargin)
+            PyModel.Width = Math.Max(1, ClientWidth - PyModel.Left - RightMargin)
         End If
+        PyModel.DropDownWidth = Math.Min(500, Math.Max(1, PyModel.Width))
     End Sub
 
     Private Sub LayoutSpandrelResponsiveControls()
