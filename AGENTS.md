@@ -1,6 +1,6 @@
 # AutoCrispy — persistent development handoff
 
-_Last updated: 2026-10-08 (Europe/Prague). Read this before continuing repository work._
+_Last updated: 2026-10-08 (Europe/Prague). Status: all issues reported by the user are marked resolved as of this date._ Read this before continuing repository work._
 
 ## Repository and branch
 
