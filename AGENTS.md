@@ -60,8 +60,3 @@ _Last updated: 2026-10-08 (Europe/Prague). Status: all issues reported by the us
 - PLKSR and DAT2 remain model choices in the Spandrel selector.
 - Preserve 1× and 4× support, tile size `0`, input/output-basename progress, profile checkboxes, and cancellation behavior.
 - Continue working and pushing only to `arena/1924e580-autocrispy`.
-
-## Related PCSX2 troubleshooting, if the user returns to it
-
-- PCSX2 2.9 texture replacement status indicator: **Settings → Graphics → On-Screen Display → Show Texture Replacement Status**; the OSD reports dump/replacement counts.
-- The reported Gran Turismo black replacement textures were not diagnosed conclusively. Missing mipmaps are more likely to affect distant/LOD sampling than to make the base texture black at all distances. Check replacement matching/name/game serial, output validity, and alpha; AutoCrispy's **Fix PS2** path removes/restores PS2 alpha around the first/final processing stages. Test one texture with the setting on/off rather than batch-changing the pack.
